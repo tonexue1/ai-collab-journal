@@ -1,0 +1,17 @@
+{
+  "name": "ai-collab-journal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "本地 OpenCode 协作观察日记：可回查原文的每日复盘与每周观察",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "start": "node src/cli.mjs serve",
+    "dev": "node src/cli.mjs serve --demo",
+    "demo": "node src/cli.mjs serve --demo",
+    "review": "node src/cli.mjs review",
+    "due": "node src/cli.mjs due",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check.mjs"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "port": 4318,
+  "dataDir": "./data",
+  "startDate": "",
+  "opencodeCommand": "opencode",
+  "model": "",
+  "projects": [],
+  "maxInputChars": 28000,
+  "timeoutMs": 600000,
+  "maxSessions": 100000
+}

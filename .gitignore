@@ -1,0 +1,13 @@
+node_modules/
+data/
+.env
+.env.*
+config.json
+*.sqlite*
+*.db*
+*.log
+coverage/
+test-results/
+.DS_Store
+*.zip
+.openai/
