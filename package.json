@@ -13,6 +13,7 @@
     "due": "node src/cli.mjs due",
     "test": "node --test test/*.test.mjs",
     "test:integration": "node test/opencode.integration.mjs",
+    "test:browser": "node test/browser.mjs",
     "check": "node scripts/check.mjs"
   }
 }

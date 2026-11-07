@@ -37,6 +37,6 @@ try{
     const filename=value('--file');if(!filename)throw new Error('需要 --file <OpenCode 导出 JSON>');
     const item=normalizeExport(JSON.parse(fs.readFileSync(filename,'utf8')));store.upsertSession(item.session,item.messages);console.log(`导入 ${item.messages.length} 条消息`);store.close();
   }else if(command==='doctor'){
-    console.log(JSON.stringify(await adapter.probe(),null,2));store.close();
+    console.log(JSON.stringify(await (adapter.doctor?adapter.doctor():adapter.probe()),null,2));store.close();
   }else throw new Error('命令：serve | review --date YYYY-MM-DD | weekly --start YYYY-MM-DD | due | import --file export.json | doctor');
 }catch(error){console.error(error.message);try{store?.close()}catch{}process.exitCode=1;}

@@ -37,6 +37,8 @@ export function prepareBatches(store, day, config, cutoff = Infinity) {
     if (!targets.length) continue;
     stats.sessions++; stats.messages+=targets.length; stats.userMessages+=targets.filter(i=>messages[i].role==='user').length;
     const indexes=new Set(); targets.forEach(i=>{for(let j=Math.max(0,i-4);j<=Math.min(messages.length-1,i+4);j++) if(messages[j].createdAt<=cutoff) indexes.add(j)});
+    // A user's turn owns its following assistant/tool messages, even across midnight.
+    for(const i of targets.filter(i=>messages[i].role==='user'))for(let j=i+1;j<messages.length&&messages[j].role!=='user';j++)if(messages[j].createdAt<=cutoff)indexes.add(j);
     const items=[];
     for (const i of [...indexes].sort((a,b)=>a-b)) {
       const m=messages[i], text=messageText(m), size=Math.max(1000,Math.floor(config.maxInputChars/4));
@@ -56,7 +58,7 @@ export function prepareBatches(store, day, config, cutoff = Infinity) {
 }
 export function validateEvents(output, batch, day, store) {
   assertShape(output, EVENT_SCHEMA);
-  const allowed=new Map(batch.messages.map(m=>[`${m.sessionId}/${m.id}`,m]));
+  const allowed=new Map([...(batch.priorEvidence||[]),...batch.messages].map(m=>[`${m.sessionId}/${m.id}`,m]));
   return output.events.map(event => {
     if(!event.title.trim()||!event.category.trim()||!event.evidence.length)throw new Error('事件标题、分类或证据为空');
     const refs=[];
@@ -72,14 +74,16 @@ export function validateEvents(output, batch, day, store) {
     if(!anchors.length)throw new Error('事件必须引用当天真实用户消息，旧背景不能计为当天事件');
     const anchor=anchors[0];
     const id=createHash('sha256').update(`${day}\0${anchor.sessionId}\0${anchor.id}`).digest('hex').slice(0,24);
-    return {id,day,title:event.title,category:event.category,summary:event.summary,intent:event.intent,intervention:event.intervention,outcome:event.outcome,evidence:event.evidence,anchor:{sessionId:anchor.sessionId,messageId:anchor.id},createdAt:anchor.createdAt};
+    return {id,day,title:event.title,category:event.category,summary:event.summary,intent:event.intent,intervention:event.intervention,outcome:event.outcome,evidence:event.evidence,anchor:{sessionId:anchor.sessionId,messageId:anchor.id},createdAt:anchor.createdAt,lastEvidenceAt:Math.max(...refs.map(m=>m.createdAt))};
   });
 }
 export async function structured(analyzer, task, data, schema, validate = value => {assertShape(value,schema);return value}) {
   let last;
   for(let attempt=0;attempt<2;attempt++){
-    const result=await analyzer.analyze(task,attempt?{...data,validationError:last.message}:data,schema);
-    try{return validate(result)}catch(error){last=error}
+    try{
+      const result=await analyzer.analyze(task,attempt?{...data,validationError:last.message}:data,schema);
+      return validate(result);
+    }catch(error){if(error.scope==='global')throw error;last=error;}
   }
   throw new Error(`模型输出校验失败：${last.message}`);
 }
@@ -90,7 +94,21 @@ export function mergeEvents(events) {
     if(!prev){byId.set(event.id,event);continue}
     const sources=new Map();
     for(const ref of [...prev.evidence,...event.evidence]){if(!sources.has(ref.sessionId))sources.set(ref.sessionId,new Set());ref.messageIds.forEach(id=>sources.get(ref.sessionId).add(id));}
-    prev.evidence=[...sources].map(([sessionId,ids])=>({sessionId,messageIds:[...ids]}));
+    // Later fragments can correct the outcome; never freeze the first partial reading.
+    byId.set(event.id,{...prev,...event,lastEvidenceAt:Math.max(prev.lastEvidenceAt||prev.createdAt,event.lastEvidenceAt||event.createdAt),evidence:[...sources].map(([sessionId,ids])=>({sessionId,messageIds:[...ids]}))});
   }
   return [...byId.values()].sort((a,b)=>a.createdAt-b.createdAt);
+}
+
+export const sourceFingerprint = batches => createHash('sha256').update(JSON.stringify(batches)).digest('hex');
+
+export function continuation(batch, events, store) {
+  const previousEvents=events.filter(e=>e.anchor.sessionId===batch.sessionId);
+  const refs=new Map();
+  for(const event of previousEvents)for(const ref of event.evidence)for(const id of ref.messageIds){
+    const m=store.message(ref.sessionId,id);if(!m)continue;
+    const text=messageText(m);
+    refs.set(`${ref.sessionId}/${id}`,{sessionId:ref.sessionId,id,role:m.role,createdAt:m.createdAt,targetDay:id===event.anchor.messageId||previousEvents.some(e=>e.anchor.messageId===id),text:text.slice(0,1500),excerpt:text.length>1500});
+  }
+  return {...batch,previousEvents,priorEvidence:[...refs.values()]};
 }
