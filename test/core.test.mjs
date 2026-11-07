@@ -11,7 +11,7 @@ import { Engine } from '../src/engine.mjs';
 import { contextFor } from '../src/server.mjs';
 import { ROOT } from '../src/config.mjs';
 const DAY='2026-06-03';
-function setup(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'collab-test-'));const store=new Store(path.join(dir,'journal.sqlite'));t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true})});const config={dataDir:dir,root:ROOT,startDate:DAY,projects:[],maxInputChars:8000,demo:false};return{store,config};}
+function setup(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'collab-test-'));const store=new Store(path.join(dir,'journal.sqlite'));t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true})});const config={dataDir:dir,root:ROOT,startDate:DAY,projects:['/project'],maxInputChars:8000,demo:false};return{store,config};}
 function fixture(){const {start,end}=bounds(DAY);return{info:{id:'old-session',title:'老会话',directory:'/project',time:{created:start-86400000*8}},messages:[
  {info:{id:'old',role:'user',time:{created:start-1000}},parts:[{type:'text',text:'昨天的方案'}]},
  {info:{id:'today',role:'user',time:{created:start}},parts:[{type:'text',text:'今天继续，按第二种方案改'}]},
@@ -59,4 +59,27 @@ test('导出失败回滚新日记，原日记和批注仍保留',async t=>{
   await assert.rejects(engine.start('daily',DAY,{collect:false}).done,/磁盘/);
   assert.equal(store.review(DAY).generatedAt,first.generatedAt);
   assert.equal(store.review(DAY).events[0].reflection.note,'保留我');
+});
+
+test('未配置采集项目时明确失败，不能把分析目录误报为全部历史',async t=>{
+  const {store,config}=setup(t);config.projects=[];
+  await assert.rejects(new OpenCode(config,store).collect(),/projects/);
+});
+
+test('分别在两个项目目录枚举，空 stdout 表示无会话',async t=>{
+  const {store,config}=setup(t);config.projects=['/one','/two'];const directories=[];
+  const fake=async(command,args,options)=>{
+    if(args[0]==='--version')return{stdout:'1.1.48'};
+    if(args[0]==='--help')return{stdout:'opencode export'};
+    directories.push(options.cwd);return{stdout:''};
+  };
+  const result=await new OpenCode({...config,maxSessions:10},store,fake).collect();
+  assert.deepEqual(directories,['/one','/two']);assert.equal(result.imported,0);
+  assert.deepEqual(result.scannedProjects,['/one','/two']);
+});
+
+test('新版 CLI 把帮助写到 stderr 时仍能探测导出命令',async t=>{
+  const {store,config}=setup(t);
+  const fake=async(command,args)=>args[0]==='--version'?{stdout:'1.19.5'}:{stdout:'',stderr:'opencode export [sessionID]'};
+  assert.equal((await new OpenCode(config,store,fake).probe()).exportCommand,'export');
 });

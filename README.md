@@ -10,6 +10,8 @@
 
 ```powershell
 # 在本项目目录执行，无需 npm install
+Copy-Item config.example.json config.json
+# 编辑 config.json：projects 填入需要回顾的项目目录，例如 ["C:/work/app"]
 node src/cli.mjs doctor
 npm start
 ```
@@ -44,7 +46,7 @@ npm run demo
 |---|---|
 | `opencodeCommand` | CLI 命令或绝对路径；计划任务建议使用绝对路径 |
 | `model` | 空值沿用默认模型，或填 `provider/model` |
-| `projects` | 空数组为 CLI 可访问的全部项目；否则填导出数据中精确的 `directory` 路径 |
+| `projects` | 自动采集必填。填需要回顾的项目绝对路径，例如 `["C:/work/app", "C:/work/sdk"]`；程序逐个目录执行 CLI，再按会话的 `directory` 精确匹配。空数组只适用于演示或手动导入分析 |
 | `startDate` | 补跑起点；空值在首次运行时记录为当天，不追补更早历史 |
 | `dataDir` | 数据目录，默认 `./data`，相对项目根目录解析 |
 | `port` | 本地网页端口，默认 4318 |
@@ -103,7 +105,7 @@ Unregister-ScheduledTask -TaskName AI-Collab-Journal
 - `data/journal.sqlite`：原文、分析快照、日报、事件、独立批注、周总结、任务状态。
 - `data/daily/YYYY-MM-DD.md`：日记导出；网页批注保存时同步更新。**数据库中的批注是事实来源，外部手改导出文件不会回写。**
 - `data/weekly/周一日期.md`：周总结导出。
-- `data/analysis-workspace/`：隔离分析会话的工作目录。输入文件在调用结束后删除；OpenCode 自身仍会保存分析会话，用前缀和 ID 排除。
+- `data/analysis-workspace/`：隔离分析会话的工作目录。材料通过标准输入发送，不经过 shell 参数或附件读取；OpenCode 自身仍会保存分析会话，用前缀和 ID 排除。
 - 不默认实时监听或改动开发会话；v0.1 每次导出选定会话，优先完整性。历史很多时建议限制项目范围。
 - 子代理会话不能可靠视为人发出的消息，因此保留其原文但不独立归纳为人的介入。暂未实现跨子会话自动追溯。
 - 原会话中已经被删除或压缩清理的内容无法凭空恢复；图片、视频等附件只显示元信息。
@@ -118,8 +120,19 @@ npm run check
 npm test
 ```
 
-自动测试覆盖跨日与旧会话、证据真实性、批注保留、失败不覆盖、并发锁、分段、CLI 版本探测、补跑和周模式校验。GitHub Actions 配置在 Windows 和 Linux 上运行相同检查。
+19 项核心测试覆盖跨日与旧会话、证据真实性、批注保留、失败不覆盖、并发锁、分段、采集项目范围、CLI 输出差异、补跑和周模式校验。
 
-已在开发环境通过核心测试，并在浏览器实际验证：生成日记、展开跨日完整原文、保存思考、刷新后保留、重新生成后保留批注。**本机真实 OpenCode、真实模型、Windows 任务计划程序需要在你的电脑上联调**；不能把演示模式通过视为这些外部依赖已验证。
+另外提供真实 OpenCode 集成测试：
+
+```powershell
+npm install --global opencode-ai@1.1.48
+npm run test:integration
+```
+
+测试使用隔离的 XDG 目录、两个临时 Git 项目、真实 OpenCode CLI 和本地固定响应的模型接口。验证会话创建/续聊/导入导出、跨项目采集、默认模型的 stdin 输入、日报/周报、HTTP 原文与批注、失败保留。它不会读取本机历史或使用真实模型凭证；不验证模型理解能力。也可通过 `OPENCODE_TEST_BIN` 指向已有的 CLI。不要为测试降级日常使用的 OpenCode，版本矩阵可直接看 GitHub Actions。
+
+CI 矩阵为 Windows/Linux × OpenCode 1.1.48/1.19.5；Windows 另安装独立任务，核对凌晨 02:00 配置后，将该临时任务改为 15 秒后的时间触发，验证实际执行 `due`，完成后清理。
+
+页面已经实际验证生成、完整原文、保存与重跑保留批注。**真实托管模型的语义效果仍未验收**：远端免费模型探测收到 `429 FreeUsageLimitError`，没有将协议测试冒充真实 LLM 测试。各平台执行结果以仓库 Actions 为准；本机睡眠唤醒和企业策略仍需现场核对。
 
 架构与后续维护见 [docs/architecture.md](docs/architecture.md)。

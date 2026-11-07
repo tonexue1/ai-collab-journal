@@ -12,6 +12,7 @@
     "review": "node src/cli.mjs review",
     "due": "node src/cli.mjs due",
     "test": "node --test test/*.test.mjs",
+    "test:integration": "node test/opencode.integration.mjs",
     "check": "node scripts/check.mjs"
   }
 }
