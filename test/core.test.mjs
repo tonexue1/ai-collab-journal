@@ -95,3 +95,9 @@ test('Windows 项目路径忽略盘符大小写、分隔符和末尾斜杠差异
   assert(matchesProject('C:/work/app',['c:\\work\\app\\'],'win32'));
   assert(!matchesProject('C:/work/app2',['c:\\work\\app'],'win32'));
 });
+
+test('项目目录别名与 OpenCode 返回的真实路径匹配',t=>{
+  const {config}=setup(t),project=path.join(config.dataDir,'project'),alias=path.join(config.dataDir,'alias');
+  fs.mkdirSync(project);fs.symlinkSync(project,alias,process.platform==='win32'?'junction':'dir');
+  assert(matchesProject(project,[alias]));
+});

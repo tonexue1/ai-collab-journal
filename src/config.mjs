@@ -6,7 +6,13 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 export function matchesProject(directory, projects, platform = process.platform) {
   if (!projects.length) return true;
   if (typeof directory !== 'string' || !directory) return false;
-  const key = value => platform === 'win32' ? path.win32.resolve(value).toLowerCase() : path.resolve(value);
+  const key = value => {
+    let resolved = platform === 'win32' ? path.win32.resolve(value) : path.resolve(value);
+    // OpenCode canonicalizes filesystem aliases (including Windows 8.3 paths).
+    // Keep path-only matching available for imported histories whose folders no longer exist.
+    if (platform === process.platform) { try { resolved = fs.realpathSync.native(resolved); } catch {} }
+    return platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
   return projects.some(project => key(project) === key(directory));
 }
 export function loadConfig({ demo = false, dataDir } = {}) {
