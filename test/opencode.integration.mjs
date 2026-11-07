@@ -98,7 +98,12 @@ try {
     await command(['import',file],dir);sessions.push(exported.info.id);store.exclude(id);
   }
   pass('native CLI creates, continues, exports and imports sessions');
-  const collection=await adapter.collect();assert.equal(collection.imported,2);assert.deepEqual(new Set(store.sessions().map(s=>s.id)),new Set(sessions));pass('two independent Git projects are collected');
+  const collection=await adapter.collect();
+  if(collection.imported!==2){
+    console.error('Synthetic collection diagnostics:',JSON.stringify({collection,projects,sessions}));
+    for(const dir of projects)console.error('Native session list:',dir,(await command(['session','list','--format','json'],dir)).stdout);
+  }
+  assert.equal(collection.imported,2);assert.deepEqual(new Set(store.sessions().map(s=>s.id)),new Set(sessions));pass('two independent Git projects are collected');
   const first=await engine.start('daily',firstDay).done;
   const second=await engine.start('daily',secondDay).done;
   assert.equal(first.events.length,2);assert.equal(second.events.length,2);assert.equal(second.coverage.userMessages,2);
