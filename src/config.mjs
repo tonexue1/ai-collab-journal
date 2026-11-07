@@ -3,6 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkDay, today } from './time.mjs';
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export function matchesProject(directory, projects, platform = process.platform) {
+  if (!projects.length) return true;
+  if (typeof directory !== 'string' || !directory) return false;
+  const key = value => platform === 'win32' ? path.win32.resolve(value).toLowerCase() : path.resolve(value);
+  return projects.some(project => key(project) === key(directory));
+}
 export function loadConfig({ demo = false, dataDir } = {}) {
   const filename = process.env.JOURNAL_CONFIG || path.join(ROOT, 'config.json');
   const saved = fs.existsSync(filename) ? JSON.parse(fs.readFileSync(filename, 'utf8')) : {};

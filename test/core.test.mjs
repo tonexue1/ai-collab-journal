@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../src/store.mjs';
 import { bounds,today,addDays,monday } from '../src/time.mjs';
-import { normalizeExport, modelText, OpenCode } from '../src/opencode.mjs';
+import { normalizeExport, modelText, OpenCode, runProcess } from '../src/opencode.mjs';
 import { prepareBatches,validateEvents } from '../src/analysis.mjs';
 import { Engine } from '../src/engine.mjs';
 import { contextFor } from '../src/server.mjs';
-import { ROOT } from '../src/config.mjs';
+import { ROOT, matchesProject } from '../src/config.mjs';
 const DAY='2026-06-03';
 function setup(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'collab-test-'));const store=new Store(path.join(dir,'journal.sqlite'));t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true})});const config={dataDir:dir,root:ROOT,startDate:DAY,projects:['/project'],maxInputChars:8000,demo:false};return{store,config};}
 function fixture(){const {start,end}=bounds(DAY);return{info:{id:'old-session',title:'老会话',directory:'/project',time:{created:start-86400000*8}},messages:[
@@ -82,4 +82,16 @@ test('新版 CLI 把帮助写到 stderr 时仍能探测导出命令',async t=>{
   const {store,config}=setup(t);
   const fake=async(command,args)=>args[0]==='--version'?{stdout:'1.19.5'}:{stdout:'',stderr:'opencode export [sessionID]'};
   assert.equal((await new OpenCode(config,store,fake).probe()).exportCommand,'export');
+});
+
+test('子进程的 PWD 与实际工作目录一致，隔离分析配置不会丢失',async t=>{
+  const {config}=setup(t),file=path.join(config.dataDir,'cwd-probe.mjs');
+  fs.writeFileSync(file,'console.log(JSON.stringify({cwd:process.cwd(),pwd:process.env.PWD}))');
+  const result=JSON.parse((await runProcess(process.execPath,[file],{cwd:config.dataDir})).stdout);
+  assert.equal(result.pwd,result.cwd);
+});
+
+test('Windows 项目路径忽略盘符大小写、分隔符和末尾斜杠差异',()=>{
+  assert(matchesProject('C:/work/app',['c:\\work\\app\\'],'win32'));
+  assert(!matchesProject('C:/work/app2',['c:\\work\\app'],'win32'));
 });

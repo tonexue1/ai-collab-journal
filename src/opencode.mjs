@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { timestamp } from './time.mjs';
+import { matchesProject } from './config.mjs';
 export const REVIEW_PREFIX = '[collab-review]';
 
 export function parseJSON(text) {
@@ -20,7 +21,9 @@ export function runProcess(command, args, { cwd, input, timeoutMs = 600000, maxB
       };
       try { argv = ['/d', '/s', '/c', `"${[command,...args].map(quote).join(' ')}"`]; program = process.env.ComSpec || 'cmd.exe'; } catch (e) { reject(e); return; }
     }
-    const child = spawn(program, argv, { cwd, windowsHide: true, windowsVerbatimArguments: process.platform === 'win32', shell: false, stdio: [input === undefined ? 'ignore' : 'pipe','pipe','pipe'] });
+    // Newer OpenCode resolves `run` from PWD; spawn(cwd) alone leaves inherited PWD stale.
+    const env = cwd ? { ...process.env, PWD: path.resolve(cwd) } : process.env;
+    const child = spawn(program, argv, { cwd, env, windowsHide: true, windowsVerbatimArguments: process.platform === 'win32', shell: false, stdio: [input === undefined ? 'ignore' : 'pipe','pipe','pipe'] });
     let stdout = '', stderr = '', bytes = 0, settled = false;
     const stop = () => {
       if (process.platform === 'win32' && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }).on('error', () => {});
@@ -36,7 +39,12 @@ export function runProcess(command, args, { cwd, input, timeoutMs = 600000, maxB
     child.on('close', code => {
       if (settled) return;
       settled = true; clearTimeout(timer);
-      if (code !== 0) reject(new Error(`OpenCode 退出码 ${code}。请在同一账户运行对应命令，检查模型登录和命令兼容性。`));
+      if (code !== 0) {
+        const error = new Error(`OpenCode 退出码 ${code}。请在同一账户运行对应命令，检查模型登录和命令兼容性。`);
+        // Non-enumerable diagnostics for explicit debugging; never persist these in run logs.
+        Object.defineProperties(error, { stdout: { value: stdout }, stderr: { value: stderr } });
+        reject(error);
+      }
       else resolve({ stdout, stderr });
     });
   });
@@ -108,13 +116,13 @@ export class OpenCode {
       if (visited.has(id)) continue;
       visited.add(id); stats.listed++;
       if ((entry.title || '').startsWith(REVIEW_PREFIX) || this.store.isExcluded(id)) { stats.excluded++; continue; }
-      if (this.config.projects.length && entry.directory && !this.config.projects.includes(entry.directory)) continue;
+      if (entry.directory && !matchesProject(entry.directory,this.config.projects)) continue;
       // Export all selected sessions; creation date is never a filter. This also catches
       // updates to existing assistant/tool parts rather than only new message IDs.
       try {
         const item = normalizeExport(parseJSON((await this.command([...this.exportArgs,id], { cwd: directory })).stdout));
         if ((item.session.title || '').startsWith(REVIEW_PREFIX)) { stats.excluded++; continue; }
-        if (this.config.projects.length && !this.config.projects.includes(item.session.directory)) continue;
+        if (!matchesProject(item.session.directory,this.config.projects)) continue;
         this.store.upsertSession(item.session, item.messages); stats.imported++;
         if (!stats.directories.includes(item.session.directory || '(未知项目)')) stats.directories.push(item.session.directory || '(未知项目)');
       } catch (error) { stats.errors.push({ sessionId:id, message:error.message }); }

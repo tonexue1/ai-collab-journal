@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { bounds } from './time.mjs';
+import { matchesProject } from './config.mjs';
 const string = { type:'string' };
 const strings = { type:'array',items:string };
 export const EVENT_SCHEMA = { type:'object',required:['events'],properties:{events:{type:'array',items:{type:'object',required:['title','category','summary','intent','intervention','outcome','evidence'],properties:{title:string,category:string,summary:string,intent:string,intervention:string,outcome:string,evidence:{type:'array',items:{type:'object',required:['sessionId','messageIds'],properties:{sessionId:string,messageIds:strings}}}}}}}};
@@ -28,7 +29,7 @@ export function prepareBatches(store, day, config, cutoff = Infinity) {
   const { start,end } = bounds(day), batches=[], stats={sessions:0,messages:0,userMessages:0,segments:0,attachments:0,childSessions:0};
   for (const session of store.sessions()) {
     if (store.isExcluded(session.id) || (session.title || '').startsWith('[collab-review]')) continue;
-    if (config.projects.length && !config.projects.includes(session.directory)) continue;
+    if (!matchesProject(session.directory,config.projects)) continue;
     if (session.parentID || session.parentId) { stats.childSessions++; continue; }
     const messages = store.messages(session.id);
     const inDay = m => m.createdAt >= start && m.createdAt < end && m.createdAt <= cutoff;

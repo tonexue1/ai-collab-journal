@@ -131,6 +131,11 @@ try {
   const manifest={opencode:version,platform:process.platform,checks,model:'local deterministic protocol fixture (not a real LLM)',generatedAt:new Date().toISOString()};
   if(process.env.INTEGRATION_REPORT)fs.writeFileSync(process.env.INTEGRATION_REPORT,JSON.stringify(manifest,null,2));
   console.log(JSON.stringify(manifest,null,2));
+} catch(error) {
+  // This environment contains synthetic fixtures only, so CLI diagnostics are safe in CI.
+  if(error.stderr)console.error(error.stderr.slice(-4000));
+  if(error.stdout)console.error(error.stdout.slice(-4000));
+  throw error;
 } finally {
   if(app)await new Promise(resolve=>app.close(resolve));
   store?.close();await new Promise(resolve=>fixture.close(resolve));
