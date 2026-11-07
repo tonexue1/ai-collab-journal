@@ -30,11 +30,13 @@ export class Engine {
     if(collect){this.store.stage(id,'读取 OpenCode 历史');collection=await this.adapter.collect();}
     const cutoff=Date.now(), inputRevision=this.store.dayRevision(day), {batches,stats}=prepareBatches(this.store,day,this.config,cutoff);
     const snapshots=Object.fromEntries([...new Set(batches.map(b=>b.sessionId))].map(id=>[id,this.store.snapshot(id)]));
-    let extracted=[];
+    let extracted=[];const priorAnchors=new Map();
     for(let i=0;i<batches.length;i++){
       this.store.stage(id,`分析会话片段 ${i+1}/${batches.length}`);
-      const batch=continuation(batches[i],extracted,this.store);
-      if(!batch.messages.some(m=>m.targetDay&&m.role==='user')&&!batch.previousEvents.length)continue;
+      const raw=batches[i],anchors=priorAnchors.get(raw.sessionId)||new Map();
+      const batch=continuation(raw,extracted,this.store,[...anchors.values()]);
+      raw.messages.filter(m=>m.targetDay&&m.role==='user').forEach(m=>anchors.set(m.id,m));priorAnchors.set(raw.sessionId,anchors);
+      if(![...batch.messages,...batch.priorEvidence].some(m=>m.targetDay&&m.role==='user'))continue;
       if(JSON.stringify(batch).length>this.config.maxInputChars*4)throw new Error('事件延续材料过大，请提高 maxInputChars；未丢弃已有证据');
       extracted=mergeEvents([...extracted,...await structured(this.adapter,'daily-events',{day,...batch},EVENT_SCHEMA,r=>validateEvents(r,batch,day,this.store))]);
     }

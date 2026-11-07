@@ -72,6 +72,7 @@ try {
   process.env.JOURNAL_CONFIG=configFile;
   const config=loadConfig();store=new Store(path.join(config.dataDir,'journal.sqlite'));
   const adapter=new OpenCode(config,store),engine=new Engine(config,store,adapter);
+  const diagnosis=await adapter.doctor();assert.equal(diagnosis.model,'fixture/reviewer');assert(!JSON.stringify(diagnosis).includes('local-test-only'));pass('doctor resolves the analysis model without exposing credentials');
   const empty=await adapter.collect();assert.equal(empty.imported,0);assert.equal(empty.scannedProjects.length,2);pass('empty project output is accepted');
   const sessions=[];
   for(const dir of projects){

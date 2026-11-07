@@ -53,7 +53,7 @@ export class Store {
   effectiveEvent(event) {
     const reflection=this.reflection(event.id);
     return {...event,...reflection.overrides,category:reflection.category||event.category,proposal:event,reflection,
-      needsReview:Boolean(reflection.basedOnRevision&&reflection.basedOnRevision!==(event.revision||1))};
+      needsReview:Boolean((reflection.updatedAt&&!reflection.basedOnRevision)||(reflection.basedOnRevision&&reflection.basedOnRevision!==(event.revision||1)))};
   }
   versioned(event) {
     const old=parse(this.db.prepare('SELECT payload FROM events WHERE id=?').get(event.id)?.payload);

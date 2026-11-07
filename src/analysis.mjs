@@ -102,9 +102,13 @@ export function mergeEvents(events) {
 
 export const sourceFingerprint = batches => createHash('sha256').update(JSON.stringify(batches)).digest('hex');
 
-export function continuation(batch, events, store) {
+export function continuation(batch, events, store, priorAnchors=[]) {
   const previousEvents=events.filter(e=>e.anchor.sessionId===batch.sessionId);
   const refs=new Map();
+  for(const anchor of priorAnchors){
+    const m=store.message(anchor.sessionId,anchor.id);if(!m)continue;
+    const text=messageText(m);refs.set(`${anchor.sessionId}/${anchor.id}`,{sessionId:anchor.sessionId,id:anchor.id,role:'user',createdAt:m.createdAt,targetDay:true,text:text.slice(0,1500),excerpt:text.length>1500});
+  }
   for(const event of previousEvents)for(const ref of event.evidence)for(const id of ref.messageIds){
     const m=store.message(ref.sessionId,id);if(!m)continue;
     const text=messageText(m);

@@ -25,9 +25,9 @@ try{
  await page.locator('#save-reflection').click();await received;await page.locator('#note').fill('第二版');finishRoute();
  await page.getByText('此前内容已保存，当前修改尚未保存。',{exact:true}).waitFor();
  assert.equal(await page.locator('#note').inputValue(),'第二版');await page.unroute('**/reflection');
- await page.locator('#edit-outcome').fill('人工确认失败');await page.locator('#save-reflection').click();await page.getByText('已保存；日/周概况将在下次回顾时更新。',{exact:true}).waitFor();
+ await page.locator('#edit-summary').fill('人工修正事实');await page.locator('#edit-outcome').fill('人工确认失败');await page.locator('#save-reflection').click();await page.getByText('已保存；日/周概况将在下次回顾时更新。',{exact:true}).waitFor();await page.locator('.event-card').filter({hasText:'人工修正事实'}).waitFor();
  await page.reload();await page.locator('[data-reflect]').first().click();assert.equal(await page.locator('#note').inputValue(),'第二版');assert.equal(await page.locator('#edit-outcome').inputValue(),'人工确认失败');console.log('PASS browser delayed save and persisted correction');
- await page.locator('#decision').selectOption('reject');await page.locator('#save-reflection').click();await page.getByText('已保存；日/周概况将在下次回顾时更新。',{exact:true}).waitFor();await page.reload();await page.getByText('已排除的事件（1）',{exact:true}).waitFor();console.log('PASS browser rejection remains accessible');
+ await page.locator('#decision').selectOption('reject');await page.locator('#save-reflection').click();await page.getByText('已保存；日/周概况将在下次回顾时更新。',{exact:true}).waitFor();await page.getByText('已排除的事件（1）',{exact:true}).waitFor();await page.reload();await page.getByText('已排除的事件（1）',{exact:true}).waitFor();console.log('PASS browser rejection remains accessible');
  await page.locator('#browse-sources').click();await page.locator('#manual-title').waitFor();
  const source=await page.locator('#browse-session').inputValue();const msg=store.messages(source).find(m=>m.role==='user'&&today(m.createdAt)===today());
  await page.locator(`input[name="evidence"][value="${msg.id}"]`).check();

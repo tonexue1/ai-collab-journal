@@ -45,6 +45,13 @@ test('长日志后出现的结局更新同一事件，并保留原锚点和最�
   assert.equal(r.events.length,1);assert.equal(r.events[0].outcome,'失败');assert.deepEqual(r.events[0].evidence[0].messageIds,['user','end']);
 });
 
+test('首片尚未提取事件时，后续片段仍可依据原用户指令形成事件',async t=>{
+  const {store,engine,adapter}=setup(t),messages=seed(store),old=adapter.analyze;
+  messages.push(message('log','assistant','日志'.repeat(15000),bounds(DAY).start+2000),message('end','assistant','最终测试失败',bounds(DAY).start+3000));store.upsertSession(session,messages);
+  adapter.analyze=async(task,data)=>task==='daily-events'&&!data.messages.some(m=>m.text.includes('最终测试失败'))?{events:[]}:old(task,data);
+  const r=await engine.start('daily',DAY,{collect:false}).done;assert.equal(r.events.length,1);assert.equal(r.events[0].outcome,'失败');
+});
+
 test('晚到的跨日结果刷新原日报，不冒充次日新增介入',async t=>{
   const day=addDays(today(),-2),next=addDays(day,1),{store,engine,calls}=setup(t,day);
   const messages=[message('user','user','请完成验证',bounds(day).end-60000)];store.upsertSession(session,messages);
