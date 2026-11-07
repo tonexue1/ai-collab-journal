@@ -9,7 +9,14 @@ try {
   @{ dataDir = $DataDir; startDate = $Today; projects = @() } | ConvertTo-Json | Set-Content -Encoding utf8 $ConfigPath
   & (Join-Path $ProjectDir 'scripts\install-schedule.ps1') -TaskName $TaskName -NoWake
   [xml]$Xml = Export-ScheduledTask -TaskName $TaskName
-  if ($Xml.Task.Triggers.CalendarTrigger.StartBoundary -notmatch 'T02:00:00\+08:00$') { throw 'Incorrect Beijing boundary' }
+  # Windows may serialize the same instant in UTC instead of retaining +08:00.
+  $Boundary = [string]$Xml.Task.Triggers.CalendarTrigger.StartBoundary
+  Write-Host "Exported boundary: $Boundary"
+  $Zone = [TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time')
+  $BeijingBoundary = [TimeZoneInfo]::ConvertTime([DateTimeOffset]::Parse($Boundary), $Zone)
+  $NextRun = [TimeZoneInfo]::ConvertTime((Get-ScheduledTaskInfo -TaskName $TaskName).NextRunTime, $Zone)
+  if ($BeijingBoundary.TimeOfDay -ne [TimeSpan]::FromHours(2) -or $NextRun.TimeOfDay -ne [TimeSpan]::FromHours(2)) { throw 'Incorrect Beijing boundary' }
+  if ($Xml.Task.Triggers.CalendarTrigger.ScheduleByDay.DaysInterval -ne '1') { throw 'Task must repeat daily' }
   if ($Xml.Task.Settings.StartWhenAvailable -ne 'true') { throw 'Missed-run recovery not enabled' }
   if ($Xml.Task.Actions.Exec.WorkingDirectory -ne $ProjectDir) { throw 'Working directory lost' }
   if ($Xml.Task.Principals.Principal.LogonType -ne 'InteractiveToken') { throw 'Unexpected account mode' }
