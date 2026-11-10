@@ -23,10 +23,12 @@ export async function testTrajectories({page,store,engine,screenshots}){
   assert.equal(await page.locator('#parse-trajectory').count(),0);
   await page.locator('#conversation-search').fill('');await page.locator('.conversation-item').first().click();
   // A delayed response for another session must never overwrite the current one.
-  await page.locator('[data-workspace="*"]').click();let finish,entered;const received=new Promise(r=>entered=r);
-  await page.route('**/api/trajectories/demo-session-0',async route=>{const response=await route.fetch();entered();await new Promise(r=>finish=r);await route.fulfill({response});});
+  await page.locator('[data-workspace="*"]').click();let finish,entered,fulfilled;const received=new Promise(r=>entered=r),delivered=new Promise(r=>fulfilled=r);
+  await page.route('**/api/trajectories/demo-session-0',async route=>{const response=await route.fetch();entered();await new Promise(r=>finish=r);await route.fulfill({response});fulfilled();});
   await page.locator('[data-conversation="demo-session-0"]').click();await received;
   await page.locator('[data-conversation="demo-session-1"]').click();await page.locator('.timeline-entry').first().waitFor();finish();
-  await page.unroute('**/api/trajectories/demo-session-0');assert.match(await page.locator('.trajectory-detail-head h2').textContent(),/跨端对照/);
+  await delivered;await page.unroute('**/api/trajectories/demo-session-0');
+  await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+  assert.match(await page.locator('.trajectory-detail-head h2').textContent(),/跨端对照/);
   console.log('PASS workspace grouping, manual parse, snapshot, retry, reload, search, race and mobile trajectory');
 }
