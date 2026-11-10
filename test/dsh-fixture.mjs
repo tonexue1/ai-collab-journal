@@ -16,7 +16,8 @@ export async function apply(ctx){
       calls++;if(fail)throw Error('fixture model failure');
       const text=options.messages[0].content[0].text;seenTail ||= text.includes('TAIL_EVIDENCE');
       const {items}=JSON.parse(text);
-      yield {type:'text-delta',index:0,text:JSON.stringify({items:items.map(i=>({id:i.id,summary:(i.text||i.fragments.map(x=>x.summary).join('；')).slice(-150),details:['测试模型生成，用于验证 DSH 插件链路。']}))})};
+      const summaries={n1:'提出目标：收敛流量购买的 H5 跳转方式。',n2:'查阅 Android 跳转实现与工具日志，找到三个入口，随后请求确认统一范围。尚未修改代码。',n3:'纠正范围：安卓和鸿蒙都要统一，要求先比较缺失的 API。',n4:'完成两端 API 对比，指出鸿蒙缺少返回结果的桥接。实现与验证尚未开始。',n5:'继续追问测试结果。'};
+      yield {type:'text-delta',index:0,text:JSON.stringify({items:items.map(i=>({id:i.id,summary:summaries[i.nodeId||i.id.split('.')[0]]||'整理会话材料。',details:['测试模型生成，用于验证 DSH 插件链路。']}))})};
       yield {type:'finish',reason:{kind:'stop'}};
     }
   }

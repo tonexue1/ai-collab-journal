@@ -23,6 +23,7 @@ try{
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
   await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
   await page.locator('.cj-timeline').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
+  await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
   await page.screenshot({path:join(output,'dsh-journal-desktop.png'),fullPage:true});
   await page.emulateMedia({colorScheme:'dark'});
   await page.screenshot({path:join(output,'dsh-journal-dark.png'),fullPage:true});
@@ -37,8 +38,8 @@ try{
   await page.locator('.cj-workspaces button[title$="harmony"]').click();await page.locator('.cj-notice').waitFor();
   await runtime.api('fail',{value:true},'journal-test');await page.getByRole('button',{name:'重新解析',exact:true}).click();
   await page.locator('.cj-reader .cj-alert').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
-  await page.getByRole('textbox',{name:'搜索会话'}).fill('不会匹配的标题');await page.getByText('没有匹配的会话',{exact:true}).waitFor();
-  assert.equal(await page.locator('.cj-node').count(),0);await page.getByRole('textbox',{name:'搜索会话'}).fill('');await page.locator('.cj-timeline').waitFor();
+  await page.getByRole('textbox',{name:'搜索会话',exact:true}).fill('不会匹配的标题');await page.getByText('没有匹配的会话',{exact:true}).waitFor();
+  assert.equal(await page.locator('.cj-node').count(),0);await page.getByRole('textbox',{name:'搜索会话',exact:true}).fill('');await page.locator('.cj-timeline').waitFor();
   await page.setViewportSize({width:560,height:1000});await page.screenshot({path:join(output,'dsh-journal-narrow.png'),fullPage:true});
   assert.ok(await page.locator('.cj-root').evaluate(e=>e.scrollWidth<=e.clientWidth+1),'plugin must fit native narrow main pane');
   assert.deepEqual(errors,[],'native page must not throw');
