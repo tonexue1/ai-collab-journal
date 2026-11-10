@@ -40,9 +40,9 @@ try{
   await page.locator('.cj-reader .cj-alert').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
   await page.getByRole('textbox',{name:'搜索会话',exact:true}).fill('不会匹配的标题');await page.getByText('没有匹配的会话',{exact:true}).waitFor();
   assert.equal(await page.locator('.cj-node').count(),0);await page.getByRole('textbox',{name:'搜索会话',exact:true}).fill('');await page.locator('.cj-timeline').waitFor();
-  await page.setViewportSize({width:560,height:1000});
   await page.getByRole('button',{name:'收起侧边栏',exact:true}).click();
-  await page.getByRole('button',{name:'打开侧边栏',exact:true}).waitFor();
+  await page.setViewportSize({width:560,height:1000});
+  await page.waitForFunction(()=>{const r=document.querySelector('.cj-root').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1;});
   await page.screenshot({path:join(output,'dsh-journal-narrow.png'),fullPage:true,animations:'disabled'});
   assert.ok(await page.locator('.cj-root').evaluate(e=>e.scrollWidth<=e.clientWidth+1),'plugin must fit native narrow main pane');
   assert.deepEqual(errors,[],'native page must not throw');
