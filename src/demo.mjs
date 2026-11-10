@@ -13,14 +13,16 @@ export function seedDemo(store) {
       const base=bounds(d).start+9*3600000+index*3600000;
       [ ['user','先了解这项任务的现状。'], ['assistant','我会先梳理现状，再确定修改范围。'], ['user',s[2]], ['assistant',s[3]], ['user',s[4]], ['assistant','后续执行结果尚未包含在这个演示片段中。'] ].forEach(([role,text],i)=>messages.push({info:{id:`demo-${d}-${index}-${i}`,role,time:{created:base+i*60000}},parts:[{type:'text',text}]}));
     }
-    const item=normalizeExport({info:{id,directory:'demo/project',title:`演示 · ${s[1]}`,time:{created,updated:Date.now()}},messages});
+    const item=normalizeExport({info:{id,directory:index===1?'demo/harmony-push':'demo/vehicle-manager',title:`演示 · ${s[1]}`,time:{created,updated:Date.now()}},messages});
     store.upsertSession(item.session,item.messages);
   });
 }
 export class DemoAdapter {
   constructor(store){this.store=store;}
-  async collect(){seedDemo(this.store);return {source:'演示数据（非真实历史、未调用模型）',listed:3,imported:3,excluded:0,directories:['demo/project']};}
+  async collect(){seedDemo(this.store);return {source:'演示数据（非真实历史、未调用模型）',listed:3,imported:3,excluded:0,directories:['demo/vehicle-manager','demo/harmony-push']};}
   async analyze(task,data){
+    if(task==='trajectory'||task==='trajectory-merge')return {items:data.items.map(item=>({id:item.id,
+      summary:task==='trajectory'?item.text.slice(0,110):item.fragments.map(f=>f.summary).join('；').slice(0,170),details:[]}))};
     if(task==='daily-events'){
       const m=data.messages.find(m=>m.targetDay&&m.role==='user'&&/应该收敛|先看安卓|清理无用注释/.test(m.text));
       if(!m)return {events:[]};

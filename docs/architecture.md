@@ -8,6 +8,7 @@
 |---|---|
 | `src/opencode.mjs` | 官方 CLI 的版本探测、会话导出、JSON 事件流解析和模型调用 |
 | `src/analysis.mjs` | 当天筛选、按会话补上下文、分段、结构校验、证据校验、事件去重 |
+| `src/trajectory.mjs` | workspace 目录、固定人机节点、分片摘要及逐节点合并、快照回查 |
 | `src/engine.mjs` | 日/周流水线、任务生命周期、补跑、Markdown 导出 |
 | `src/store.mjs` | SQLite、原文快照、事件版本、人工决定、日期材料版本、冻结周报告、跨进程锁 |
 | `src/server.mjs` | 本机 HTTP API、同源限制、静态页面 |
@@ -33,11 +34,24 @@
 
 `due` 持有整批租约并共用一次采集，然后比较既有日报的材料指纹及概况版本；完整日期仍可因后续结果或人工修正而更新。单日故障记录后继续，整体采集或模型服务故障停止整批。
 
+## 一次手动轨迹解析
+
+浏览器先请求 workspace 目录，只读取 SQLite 中已采集的会话概况。手动同步调用适配器 `collect()`，不触发模型。目录以完整工作路径分组，排除分析会话、子会话以及不在配置项目范围内的记录。
+
+手动解析复用跨进程租约和运行记录，先保存整个会话的不可变快照，再由程序固定边界：每条用户消息独立，连续助手消息合并。模型只生成各节点的短摘要与细节，不控制顺序、角色、时间或消息引用。完整可读材料按字符预算分片；同节点的多个片段摘要逐级合并，不直接丢弃长工具输出。二进制附件只保留说明。
+
+仅在所有片段通过完整性、ID 和长度校验后发布轨迹。数据库新增 `trajectories` 与 `trajectory_versions`，自动建表，无破坏性迁移。节点原文请求携带 snapshot ID，页面打开期间即使另一次解析完成，也仍回查对应快照。内容指纹不同即标记待更新；失败不覆盖旧结果。机器语义仍可能出错，用户可回查原文。
+
+该版本没有自动价值筛选或轨迹定时解析。`due` 保留既有日/周行为。
+
 ## API
 
 | 接口 | 行为 |
 |---|---|
 | `GET /api/status` | 本地模式、日期、项目配置；不返回密钥 |
+| `GET /api/workspaces` | 已采集主会话按 workspace 分组，含解析状态与正在运行的任务 |
+| `GET /api/trajectories/:sessionId` | 当前轨迹及是否需要更新；未解析返回 null |
+| `GET /api/trajectories/:sessionId/context?node=…&snapshot=…` | 节点对应的固定版本原文与前后各一条消息 |
 | `GET /api/reviews` | 日记索引 |
 | `GET /api/reviews/:date` | 日记、事件及保留的旧批注 |
 | `GET /api/events/:id` | 事件及日期 |
@@ -46,7 +60,7 @@
 | `GET /api/sessions?day=YYYY-MM-DD` | 列出已采集的当天会话，不依赖 AI 提取结果 |
 | `GET /api/sessions/:id` | 当前采集范围内的完整原文 |
 | `POST /api/events` | 带实际消息依据的人工补记，重跑不删除 |
-| `POST /api/runs` | `{kind,date,collect}`，返回任务 ID，后台执行 |
+| `POST /api/runs` | 日/周 `{kind,date,collect}`；同步 `{kind:"collect"}`；轨迹 `{kind:"trajectory",sessionId}`。返回任务 ID，后台执行 |
 | `GET /api/runs` | 最近运行状态 |
 | `GET /api/weeks` | 每周观察 |
 | `GET /api/weeks/history?start=YYYY-MM-DD` | 该周保存的报告版本 |

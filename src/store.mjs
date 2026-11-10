@@ -24,9 +24,20 @@ export class Store {
       CREATE TABLE IF NOT EXISTS event_versions (event_id TEXT, revision INTEGER, payload TEXT NOT NULL, PRIMARY KEY(event_id,revision));
       CREATE TABLE IF NOT EXISTS day_revisions (day TEXT PRIMARY KEY, revision INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS week_versions (id TEXT PRIMARY KEY, start TEXT NOT NULL, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS trajectories (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS trajectory_versions (session_id TEXT, snapshot_id TEXT, payload TEXT NOT NULL, PRIMARY KEY(session_id,snapshot_id));
     `);
   }
   close() { this.db.close(); }
+  trajectory(id) { return parse(this.db.prepare('SELECT payload FROM trajectories WHERE session_id=?').get(id)?.payload); }
+  trajectoryVersion(id,snapshotId) { return parse(this.db.prepare('SELECT payload FROM trajectory_versions WHERE session_id=? AND snapshot_id=?').get(id,snapshotId)?.payload); }
+  saveTrajectory(report) {
+    this.transaction(()=>{
+      const payload=JSON.stringify(report);
+      this.db.prepare('INSERT INTO trajectories VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET payload=excluded.payload').run(report.sessionId,payload);
+      this.db.prepare('INSERT OR IGNORE INTO trajectory_versions VALUES(?,?,?)').run(report.sessionId,report.snapshotId,payload);
+    });return report;
+  }
   transaction(fn) { this.db.exec('BEGIN IMMEDIATE'); try { const value = fn(); this.db.exec('COMMIT'); return value; } catch (error) { this.db.exec('ROLLBACK'); throw error; } }
   upsertSession(session, messages) {
     this.transaction(() => {
@@ -136,7 +147,7 @@ export class Store {
       return {...w,stale};
     });
   }
-  runs() { return this.db.prepare('SELECT * FROM runs ORDER BY started_at DESC LIMIT 50').all(); }
+  runs() { return this.db.prepare('SELECT * FROM runs ORDER BY started_at DESC,rowid DESC LIMIT 50').all(); }
   newRun(kind, scope) { const id = randomUUID(); this.db.prepare('INSERT INTO runs VALUES(?,?,?,\'running\',\'准备中\',?,NULL,NULL)').run(id, kind, scope, Date.now()); return id; }
   stage(id, stage) { this.db.prepare('UPDATE runs SET stage=? WHERE id=?').run(stage, id); }
   finish(id, error) { this.db.prepare('UPDATE runs SET status=?,stage=?,finished_at=?,error=? WHERE id=?').run(error ? 'failed' : 'succeeded', error ? '失败' : '完成', Date.now(), error?.message?.slice(0,2000) || null, id); }

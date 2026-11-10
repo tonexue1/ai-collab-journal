@@ -5,6 +5,7 @@ import { normalizeExport } from './opencode.mjs';
 import { today, monday } from './time.mjs';
 import { checkDay, bounds } from './time.mjs';
 import { matchesProject } from './config.mjs';
+import { workspaceCatalog, trajectoryReport, trajectoryContext } from './trajectory.mjs';
 
 const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
 async function body(req){
@@ -38,6 +39,9 @@ export function createServer(config,store,engine){
       const url=new URL(req.url,'http://localhost');
       if(req.method==='GET'&&url.pathname==='/api/status')return json(res,200,{demo:config.demo,today:today(),timeZone:'Asia/Shanghai',startDate:config.startDate,projects:config.projects,dataDir:config.dataDir,opencodeCommand:config.opencodeCommand,model:config.model||'OpenCode 默认模型',schedule:'Windows 任务计划程序 · 凌晨 02:00（需本机安装）'});
       if(req.method==='GET'&&url.pathname==='/api/reviews')return json(res,200,store.listReviews());
+      if(req.method==='GET'&&url.pathname==='/api/workspaces')return json(res,200,workspaceCatalog(store,config));
+      const trajectory=url.pathname.match(/^\/api\/trajectories\/([a-zA-Z0-9_-]+)(\/context)?$/);
+      if(req.method==='GET'&&trajectory)return json(res,200,trajectory[2]?trajectoryContext(store,config,trajectory[1],url.searchParams.get('node'),url.searchParams.get('snapshot')):trajectoryReport(store,config,trajectory[1]));
       if(req.method==='GET'&&url.pathname.startsWith('/api/reviews/')){const r=store.review(url.pathname.split('/').at(-1));return json(res,r?200:404,r||{error:'这一天尚未生成日记'});}
       if(req.method==='GET'&&url.pathname==='/api/weeks')return json(res,200,store.weeks());
       if(req.method==='GET'&&url.pathname==='/api/weeks/history')return json(res,200,store.weekHistory(checkDay(url.searchParams.get('start'))));
@@ -63,7 +67,7 @@ export function createServer(config,store,engine){
       const reflection=url.pathname.match(/^\/api\/events\/([a-f0-9]+)\/reflection$/);
       if(req.method==='PUT'&&reflection){const saved=store.reflect(reflection[1],await body(req));engine.writeDaily(store.event(reflection[1]).day);return json(res,200,{ok:true,reflection:saved,event:store.event(reflection[1])});}
       if(req.method==='POST'&&url.pathname==='/api/runs'){
-        const input=await body(req),job=engine.start(input.kind||'daily',input.date||today(),{collect:input.collect!==false});
+        const input=await body(req),job=engine.start(input.kind||'daily',input.kind==='trajectory'?input.sessionId:input.date||today(),{collect:input.collect!==false});
         return json(res,202,{id:job.id});
       }
       if(req.method==='POST'&&url.pathname==='/api/import'){
@@ -76,7 +80,7 @@ export function createServer(config,store,engine){
         res.writeHead(200,{'Content-Type':'text/markdown; charset=utf-8','Content-Disposition':`attachment; filename="${day}.md"`});return res.end(fs.readFileSync(path.join(config.dataDir,'daily',`${day}.md`)));
       }
       if(req.method==='GET'){
-        const files={'/':'index.html','/app.js':'app.js','/editor.js':'editor.js','/style.css':'style.css'};const file=files[url.pathname];
+        const files={'/':'index.html','/app.js':'app.js','/editor.js':'editor.js','/trajectories.js':'trajectories.js','/trajectory.css':'trajectory.css','/style.css':'style.css'};const file=files[url.pathname];
         if(file){const type=file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html';res.writeHead(200,{'Content-Type':`${type}; charset=utf-8`});return res.end(fs.readFileSync(path.join(config.root,'public',file)));}
       }
       json(res,404,{error:'未找到此资源'});

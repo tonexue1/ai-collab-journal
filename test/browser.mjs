@@ -1,5 +1,6 @@
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import assert from 'node:assert/strict';
+import {testTrajectories} from './trajectory.browser.mjs';
 import {Store} from '../src/store.mjs';
 import {Engine} from '../src/engine.mjs';
 import {DemoAdapter} from '../src/demo.mjs';
@@ -18,7 +19,7 @@ try{
  server=createServer(config,store,engine);await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}`;
  browser=await chromium.launch({...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
  page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(base);await page.locator('.event-card').first().waitFor();
+ await page.goto(base);await testTrajectories({page,store,engine,screenshots});await page.locator('[data-nav="daily"]').click();await page.locator('.event-card').first().waitFor();
  await page.locator('[data-reflect]').first().click();await page.locator('#note').fill('第一版');
  let finishRoute,entered;const received=new Promise(r=>entered=r);
  await page.route('**/reflection',async route=>{const response=await route.fetch();entered();await new Promise(r=>finishRoute=r);await route.fulfill({response});});
@@ -26,8 +27,8 @@ try{
  await page.getByText('此前内容已保存，当前修改尚未保存。',{exact:true}).waitFor();
  assert.equal(await page.locator('#note').inputValue(),'第二版');await page.unroute('**/reflection');
  await page.locator('#edit-summary').fill('人工修正事实');await page.locator('#edit-outcome').fill('人工确认失败');await page.locator('#save-reflection').click();await page.getByText('已保存；日/周概况将在下次回顾时更新。',{exact:true}).waitFor();await page.locator('.event-card').filter({hasText:'人工修正事实'}).waitFor();
- await page.reload();await page.locator('[data-reflect]').first().click();assert.equal(await page.locator('#note').inputValue(),'第二版');assert.equal(await page.locator('#edit-outcome').inputValue(),'人工确认失败');console.log('PASS browser delayed save and persisted correction');
- await page.locator('#decision').selectOption('reject');await page.locator('#save-reflection').click();await page.getByText('已保存；日/周概况将在下次回顾时更新。',{exact:true}).waitFor();await page.getByText('已排除的事件（1）',{exact:true}).waitFor();await page.reload();await page.getByText('已排除的事件（1）',{exact:true}).waitFor();console.log('PASS browser rejection remains accessible');
+ await page.reload();await page.locator('[data-nav="daily"]').click();await page.locator('[data-reflect]').first().click();assert.equal(await page.locator('#note').inputValue(),'第二版');assert.equal(await page.locator('#edit-outcome').inputValue(),'人工确认失败');console.log('PASS browser delayed save and persisted correction');
+ await page.locator('#decision').selectOption('reject');await page.locator('#save-reflection').click();await page.getByText('已保存；日/周概况将在下次回顾时更新。',{exact:true}).waitFor();await page.getByText('已排除的事件（1）',{exact:true}).waitFor();await page.reload();await page.locator('[data-nav="daily"]').click();await page.getByText('已排除的事件（1）',{exact:true}).waitFor();console.log('PASS browser rejection remains accessible');
  await page.locator('#browse-sources').click();await page.locator('#manual-title').waitFor();
  const source=await page.locator('#browse-session').inputValue();const msg=store.messages(source).find(m=>m.role==='user'&&today(m.createdAt)===today());
  await page.locator(`input[name="evidence"][value="${msg.id}"]`).check();

@@ -47,7 +47,8 @@ const fixture = http.createServer(async (req,res) => {
       else if(input.task==='weekly'){
         const events=input.data.reviews.filter(r=>r.events.length).slice(0,2).map(r=>r.events[0].id);
         text=JSON.stringify({overview:'协议测试周总结。',patterns:events.length===2?[{title:'跨日观察',observation:'协议测试模式',eventIds:events}]:[],questions:[]});
-      }else throw new Error('Unknown analysis task');
+      }else if(input.task==='trajectory'||input.task==='trajectory-merge')text=JSON.stringify({items:input.data.items.map(item=>({id:item.id,summary:'协议替身的轨迹摘要',details:[]}))});
+      else throw new Error('Unknown analysis task');
     }
     const base={id:'chatcmpl-fixture',object:'chat.completion.chunk',created:Math.floor(Date.now()/1000),model:body.model};
     res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'});
@@ -105,6 +106,11 @@ try {
     for(const dir of projects)console.error('Native session list:',dir,(await command(['session','list','--format','json'],dir)).stdout);
   }
   assert.equal(collection.imported,2);assert.deepEqual(new Set(store.sessions().map(s=>s.id)),new Set(sessions));pass('two independent Git projects are collected');
+  const trajectory=await engine.start('trajectory',sessions[0]).done;
+  assert.equal(trajectory.nodes.filter(n=>n.role==='user').length,2);
+  assert(requests.some(r=>r.task==='trajectory'));
+  assert.equal(store.snapshotMessages(trajectory.snapshotId).length,store.messages(sessions[0]).length);
+  pass('manual trajectory via real OpenCode preserves both human turns and evidence');
   const first=await engine.start('daily',firstDay).done;
   const second=await engine.start('daily',secondDay).done;
   assert.equal(first.events.length,2);assert.equal(second.events.length,2);assert.equal(second.coverage.userMessages,2);

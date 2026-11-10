@@ -3,10 +3,16 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { checkDay, today, addDays, dates, monday, bounds } from './time.mjs';
 import { prepareBatches, validateEvents, mergeEvents, structured, EVENT_SCHEMA, SUMMARY_SCHEMA, WEEK_SCHEMA, assertShape, sourceFingerprint, continuation } from './analysis.mjs';
+import { sourceSession, analyzeTrajectory } from './trajectory.mjs';
 
 export class Engine {
   constructor(config,store,adapter){this.config=config;this.store=store;this.adapter=adapter;}
   start(kind,scope,{collect=true}={}){
+    if(kind==='trajectory'){
+      sourceSession(this.store,this.config,scope);
+      return this.execute(kind,scope,false,this.store.lock());
+    }
+    if(kind==='collect')return this.execute(kind,today(),true,this.store.lock());
     checkDay(scope);
     if(scope>today())throw new Error('不能回顾未来日期');
     if(!['daily','weekly'].includes(kind))throw new Error('任务类型无效');
@@ -17,13 +23,23 @@ export class Engine {
     const id=this.store.newRun(kind,scope);
     const done=(async()=>{
       try{
-        const result=kind==='daily'?await this.daily(scope,id,collect):await this.weekly(scope,id);
+        let result;
+        if(kind==='collect'){this.store.stage(id,'同步 OpenCode 会话（不调用模型）');result=await this.adapter.collect();}
+        else if(kind==='trajectory')result=await this.trajectory(scope,id);
+        else result=kind==='daily'?await this.daily(scope,id,collect):await this.weekly(scope,id);
         this.store.finish(id);return result;
       }catch(error){this.store.finish(id,error);throw error}finally{release()}
     })();
     // Attach a rejection handler immediately; HTTP clients poll run status separately.
     done.catch(()=>{});
     return {id,done};
+  }
+  async trajectory(sessionId,runId){
+    const session=sourceSession(this.store,this.config,sessionId),snapshotId=this.store.snapshot(sessionId),messages=this.store.snapshotMessages(snapshotId);
+    const nodes=await analyzeTrajectory(this.adapter,messages,this.config.maxInputChars,stage=>this.store.stage(runId,stage));
+    return this.store.saveTrajectory({sessionId,title:session.title||sessionId,directory:session.directory||'',snapshotId,nodes,
+      generatedAt:Date.now(),mode:this.config.demo?'demo':'live',messageCount:messages.length,
+      limitations:['仅整理已采集的主会话；子代理仅呈现主会话中已有的委派和回报','二进制附件未解析；源端已清理的内容无法恢复']});
   }
   async daily(day,id,collect){
     let collection=this.collection||{source:'已导入的本地记录',directories:this.store.sessions().map(s=>s.directory)};

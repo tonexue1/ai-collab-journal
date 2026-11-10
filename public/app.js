@@ -1,6 +1,7 @@
 import { SaveState } from './editor.js';
+import { createTrajectoryView } from './trajectories.js';
 const editor=new SaveState();
-const state={view:'daily',status:null,days:[],day:'',review:null,event:null,tab:'context',before:6,after:6,full:false,sourceSession:'',dirty:false,contextRequest:0,weekId:''};
+const state={view:'workspaces',status:null,days:[],day:'',review:null,event:null,tab:'context',before:6,after:6,full:false,sourceSession:'',dirty:false,contextRequest:0,weekId:''};
 const app=document.getElementById('app');
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const when=ms=>new Date(ms).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
@@ -8,8 +9,10 @@ const dayOf=ms=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).form
 async function api(url,method='GET',data){const r=await fetch(url,{method,headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const v=await r.json();if(!r.ok)throw new Error(v.error||'请求失败');return v;}
 function toast(text,error=false){const box=document.getElementById('toast');box.textContent=text;box.className=error?'error':'';box.hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>box.hidden=true,4500);}
 function canLeave(){return !state.dirty||confirm('这条思考尚未保存，确定离开吗？');}
+const trajectoryView=createTrajectoryView({api,toast,when});
 function shell(){
- app.innerHTML=`<div class="shell"><aside class="sidebar"><div class="brand">协作观察<span>COLLABORATION JOURNAL</span></div><nav aria-label="主导航">${[['daily','◷','每日日记'],['weekly','▤','每周观察'],['sources','≡','当天对话'],['runs','↻','运行记录'],['settings','⚙','设置与接入']].map(([id,icon,label])=>`<button data-nav="${id}" class="${state.view===id?'active':''}"><span class="nav-symbol">${icon}</span>${label}</button>`).join('')}</nav><div class="recent-wrap"><div class="recent-title">最近的日记</div><div class="recent">${state.days.slice(0,12).map(d=>`<button data-day="${d.day}" class="${state.day===d.day&&state.view==='daily'?'active':''}">${d.day}${d.complete?'':' · 暂稿'}</button>`).join('')||'<span class="small">　还没有日记</span>'}</div></div><div class="side-foot"><b>每天留一点时间，认识自己的工作。</b><p>北京时间 · 本地保存</p></div></aside><main class="main"><div class="topbar"><div class="crumb">AI 优化之道 / ${({daily:'每日复盘',weekly:'每周观察',sources:'当天对话',runs:'运行记录',settings:'设置与接入'})[state.view]}</div><span class="local-badge">${state.status.demo?'演示模式':'本地工作空间'}</span></div>${state.status.demo?'<div class="demo-banner">演示数据与真实记录隔离保存。当前对话、分析均为示例，未调用真实模型。</div>':''}<div id="page"></div><div class="footer-note">观察事实，核对依据，留下自己的判断。</div></main></div>`;
+ trajectoryView.unmount();
+ app.innerHTML=`<div class="shell ${state.view==='workspaces'?'archive-shell':''}"><aside class="sidebar"><div class="brand">协作观察<span>COLLABORATION JOURNAL</span></div><nav aria-label="主导航">${[['workspaces','▦','会话轨迹'],['daily','◷','每日日记'],['weekly','▤','每周观察'],['sources','≡','当天对话'],['runs','↻','运行记录'],['settings','⚙','设置与接入']].map(([id,icon,label])=>`<button data-nav="${id}" class="${state.view===id?'active':''}"><span class="nav-symbol">${icon}</span>${label}</button>`).join('')}</nav><div class="recent-wrap"><div class="recent-title">最近的日记</div><div class="recent">${state.days.slice(0,12).map(d=>`<button data-day="${d.day}" class="${state.day===d.day&&state.view==='daily'?'active':''}">${d.day}${d.complete?'':' · 暂稿'}</button>`).join('')||'<span class="small">　还没有日记</span>'}</div></div><div class="side-foot"><b>每天留一点时间，认识自己的工作。</b><p>北京时间 · 本地保存</p></div></aside><main class="main"><div class="topbar"><div class="crumb">AI 优化之道 / ${({workspaces:'工作空间与轨迹',daily:'每日复盘',weekly:'每周观察',sources:'当天对话',runs:'运行记录',settings:'设置与接入'})[state.view]}</div><span class="local-badge">${state.status.demo?'演示模式':'本地工作空间'}</span></div>${state.status.demo?'<div class="demo-banner">演示数据与真实记录隔离保存。当前对话、分析均为示例，未调用真实模型。</div>':''}<div id="page"></div><div class="footer-note">观察事实，核对依据，留下自己的判断。</div></main></div>`;
 }
 function eventCard(e,retired=false){return `<article class="event-card ${state.event?.id===e.id?'selected':''}"><div class="card-top"><span class="tag">${esc(e.reflection.category||e.category)}</span><span class="status-note">${e.reflection.follow?'留到周总结 ':''}${e.reflection.note?'有思考':''}${retired?' · 历史版本':''}${e.reflection.decision==='reject'?' · 已排除':''}${e.needsReview?' · 依据变化，请重看':''}${e.origin==='human'?' · 人工补记':''}</span></div><h3>${esc(e.title)}</h3><p>${esc(e.summary)}</p><div class="actions"><button data-event="${e.id}">查看原会话</button><button class="ghost" data-reflect="${e.id}">写下思考</button></div></article>`;}
 function renderEventGroups(r){return `<div class="event-list">${r.events.map(e=>eventCard(e)).join('')||'<div class="empty">没有识别出需要单独归纳的事件，不代表你今天没有工作。</div>'}</div>${r.rejectedEvents?.length?`<details class="retired"><summary>已排除的事件（${r.rejectedEvents.length}）</summary><div class="event-list">${r.rejectedEvents.map(e=>eventCard(e)).join('')}</div></details>`:''}${r.retiredEvents.length?`<details class="retired"><summary>重新分析前保留的批注（${r.retiredEvents.length}）</summary><div class="event-list">${r.retiredEvents.map(e=>eventCard(e,true)).join('')}</div></details>`:''}`;}
@@ -71,14 +74,14 @@ async function saveReflection(){
 }
 async function startRun(kind,date,collect=true){
  if(!canLeave())return;
- const result=await api('/api/runs','POST',{kind,date,collect});toast('任务已开始，可在运行记录查看进度');await showView('runs');pollJob(result.id,date,kind);
+ const result=await api('/api/runs','POST',{kind,date,collect,...(kind==='trajectory'?{sessionId:date}:{})});toast('任务已开始，可在运行记录查看进度');await showView('runs');pollJob(result.id,date,kind);
 }
 function pollJob(id,date,kind){
  clearTimeout(pollJob.timer);
- const poll=async()=>{try{const runs=await api('/api/runs'),job=runs.find(r=>r.id===id);if(state.view==='runs')renderRuns(runs);if(job?.status==='running'){pollJob.timer=setTimeout(poll,2000);return}state.days=await api('/api/reviews');if(job?.status==='succeeded'){toast('复盘已完成');if(state.view==='runs')kind==='daily'?await showDaily(date):await showView('weekly');}else if(job)toast(job.error||'执行失败，可重试',true);}catch(error){toast(error.message,true)}};pollJob.timer=setTimeout(poll,1000);
+ const poll=async()=>{try{const runs=await api('/api/runs'),job=runs.find(r=>r.id===id);if(state.view==='runs')renderRuns(runs);if(job?.status==='running'){pollJob.timer=setTimeout(poll,2000);return}state.days=await api('/api/reviews');if(job?.status==='succeeded'){toast('复盘已完成');if(state.view==='runs')kind==='daily'?await showDaily(date):await showView(['collect','trajectory'].includes(kind)?'workspaces':'weekly');}else if(job)toast(job.error||'执行失败，可重试',true);}catch(error){toast(error.message,true)}};pollJob.timer=setTimeout(poll,1000);
 }
 function renderRuns(runs){
- document.getElementById('page').innerHTML=`<div class="heading"><div><h1>每一次回顾，都有记录</h1><div class="muted small">失败不会标记为成功；上一次日记仍然保留。</div></div><button id="refresh-runs">刷新</button></div><div class="run-list">${runs.map(r=>`<article class="run-row ${r.status}"><div class="card-top"><h3>${esc(r.scope)} · ${r.kind==='collect'?'采集对话':r.kind==='daily'?'每日复盘':'每周观察'}</h3><span class="tag">${({running:'执行中',succeeded:'已完成',failed:'失败'})[r.status]}</span></div><p>${esc(r.stage)} · ${when(r.started_at)}</p>${r.error?`<p class="error">${esc(r.error)}</p>${r.kind==='collect'?'<span class="small">修复采集问题后，重新生成所需日期的日记。</span>':`<button data-retry="${r.scope}" data-kind="${r.kind}">重新执行</button>`}`:''}</article>`).join('')||'<div class="empty">尚无运行记录。</div>'}</div>`;
+ document.getElementById('page').innerHTML=`<div class="heading"><div><h1>每一次回顾，都有记录</h1><div class="muted small">失败不会标记为成功；上一次日记仍然保留。</div></div><button id="refresh-runs">刷新</button></div><div class="run-list">${runs.map(r=>`<article class="run-row ${r.status}"><div class="card-top"><h3>${esc(r.scope)} · ${r.kind==='collect'?'采集对话':r.kind==='trajectory'?'会话轨迹':r.kind==='daily'?'每日复盘':'每周观察'}</h3><span class="tag">${({running:'执行中',succeeded:'已完成',failed:'失败'})[r.status]}</span></div><p>${esc(r.stage)} · ${when(r.started_at)}</p>${r.error?`<p class="error">${esc(r.error)}</p>${r.kind==='collect'?'<span class="small">修复采集问题后，重新生成所需日期的日记。</span>':`<button data-retry="${r.scope}" data-kind="${r.kind}">重新执行</button>`}`:''}</article>`).join('')||'<div class="empty">尚无运行记录。</div>'}</div>`;
 }
 async function showWeekHistory(start){
  if(!canLeave())return;state.view='weekly';state.dirty=false;editor.changed();shell();
@@ -108,6 +111,7 @@ async function saveManual(){
 function previousMonday(){const d=new Date(`${state.status.today}T12:00:00Z`);d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7)-7);return d.toISOString().slice(0,10)}
 async function showView(view){
  if(!canLeave())return;editor.changed();state.dirty=false;state.contextRequest++;state.view=view;shell();const page=document.getElementById('page');
+ if(view==='workspaces'){await trajectoryView.mount(page);return}
  if(view==='sources'){await showSources(state.day||state.status.today);return}
  if(view==='daily'){await showDaily(state.day||state.status.today);return}
  if(view==='runs'){renderRuns(await api('/api/runs'));return}
@@ -151,4 +155,4 @@ app.addEventListener('change',async e=>{try{
  if(e.target.id==='import-file'&&e.target.files[0]){const file=e.target.files[0];if(file.size>64*1024*1024)throw new Error('文件超过 64 MB');const r=await api('/api/import','POST',JSON.parse(await file.text()));toast(`已导入 ${r.messages} 条消息`)}
  }catch(error){toast(error.message,true)}});
 window.addEventListener('beforeunload',e=>{if(state.dirty){e.preventDefault();e.returnValue=''}});
-(async()=>{try{state.status=await api('/api/status');state.days=await api('/api/reviews');state.day=state.days[0]?.day||state.status.today;await showDaily(state.day);const active=(await api('/api/runs')).find(r=>r.status==='running');if(active)pollJob(active.id,active.scope,active.kind);}catch(error){app.innerHTML=`<div class="error">无法读取本地服务：${esc(error.message)}</div>`}})();
+(async()=>{try{state.status=await api('/api/status');state.days=await api('/api/reviews');state.day=state.days[0]?.day||state.status.today;await showView('workspaces');}catch(error){app.innerHTML=`<div class="error">无法读取本地服务：${esc(error.message)}</div>`}})();
