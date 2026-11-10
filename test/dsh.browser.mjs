@@ -12,6 +12,9 @@ try{
   page=await context.newPage();page.setDefaultTimeout(30000);page.on('pageerror',e=>errors.push(e.stack||e.message));
   await page.goto(runtime.base);
   await page.getByRole('button',{name:'继续',exact:true}).click({timeout:60000});
+  const later=page.getByRole('button',{name:'稍后配置',exact:true});
+  const needsSetup=await later.waitFor({timeout:5000}).then(()=>true,()=>false);
+  if(needsSetup)await later.click();
   await page.getByRole('button',{name:'协作观察',exact:true}).click({timeout:60000});
   await page.locator('[data-testid=journal]').waitFor();
   await page.locator('.cj-workspaces button[title$="harmony"]').click();
@@ -21,6 +24,9 @@ try{
   await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
   await page.locator('.cj-timeline').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
   await page.screenshot({path:join(output,'dsh-journal-desktop.png'),fullPage:true});
+  await page.emulateMedia({colorScheme:'dark'});
+  await page.screenshot({path:join(output,'dsh-journal-dark.png'),fullPage:true});
+  await page.emulateMedia({colorScheme:'light'});
   await page.getByRole('button',{name:'查看原文'}).nth(1).click();
   await page.locator('.cj-source').first().waitFor();assert.match(await page.locator('.cj-evidence').innerText(),/TAIL_EVIDENCE/);
   await page.screenshot({path:join(output,'dsh-journal-context.png'),fullPage:true});
