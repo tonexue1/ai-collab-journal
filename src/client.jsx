@@ -48,7 +48,7 @@ export function JournalPage(){
   useEffect(()=>{setId(current=>sessions.some(s=>s.id===current)?current:sessions[0]?.id||'');},[workspace,query,archived,catalog]);
   useEffect(()=>{
     const version=++selection.current,controller=new AbortController();
-    setDetail(null);setStarting(false);setError('');
+    setDetail(previous=>previous?.id===id?previous:null);setStarting(false);setError('');
     if(!id)return()=>controller.abort();
     async function pull(){
       try {const data=await request('detail',{id},controller.signal);if(version!==selection.current)return;setDetail(data);}
