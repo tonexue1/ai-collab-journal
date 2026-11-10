@@ -1,88 +1,51 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import {Store} from '../src/store.mjs';
-import {Engine} from '../src/engine.mjs';
-import {ROOT} from '../src/config.mjs';
-import {createServer} from '../src/server.mjs';
-import {workspaceCatalog,trajectoryNodes,trajectoryReport,trajectoryContext,analyzeTrajectory} from '../src/trajectory.mjs';
-const source={id:'conversation',directory:'/work/one/app',title:'购买入口收敛'};
-const msg=(id,role,text,offset)=>({id,sessionId:source.id,role,createdAt:Date.parse('2026-11-06T15:59:00Z')+offset*60000,parts:[{type:'text',text}]});
-const samples=()=>[msg('u1','user','先梳理入口',0),msg('a1','assistant','准备读文件',0.5),msg('a2','assistant','发现两个入口',2),msg('u2','user','只改购买入口',3),msg('u3','user','不要改容器',4),msg('a3','assistant','修改已执行，测试失败',5)];
-function setup(t){
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'journal-trajectories-')),store=new Store(path.join(dir,'journal.sqlite'));
-  t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true})});
-  const config={root:ROOT,dataDir:dir,projects:[],maxInputChars:8000,demo:false},calls=[];
-  const adapter={async collect(){calls.push({task:'collect'});store.upsertSession(source,samples());return {imported:1}},async analyze(task,data){calls.push({task,data});return {items:data.items.map(item=>({id:item.id,summary:task==='trajectory'?item.text.slice(-120):item.fragments.map(f=>f.summary).join('；').slice(-170),details:[]}))};}};
-  store.upsertSession(source,samples());return {config,store,adapter,calls,engine:new Engine(config,store,adapter)};
+import { sourceEntries,trajectoryNodes,analyzeTrajectory,validateOutput,fingerprint,routeFrom } from '../src/trajectory.mjs';
+import { Journal } from '../src/service.mjs';
+import { journalSpec } from '../src/domain.mjs';
+const user=(text,source='user')=>({type:'user/message',data:{content:[{type:'text',text}],source:{kind:source}}});
+const ai=text=>({type:'assistant/message',data:{message:{content:[{type:'text',text}],source:{kind:'model',provider:'fixture',model:'test'}}}});
+const events=(...es)=>es.map((e,seq)=>({...e,seq,time:1000+seq}));
+const generate=async({items})=>JSON.stringify({items:items.map(i=>({id:i.id,summary:(i.text||i.fragments.map(f=>f.summary).join('')).slice(-170),details:[]}))});
+test('native domain declaration loads',()=>assert.equal(journalSpec.name,'dsh_collab_journal'));
+test('human boundaries stay separate; injected context is not counted as human',()=>{
+  const entries=sourceEntries(events(user('目标'),ai('调查'),user('skill','skill'),ai('结果'),user('纠正'),user('补充')));
+  const nodes=trajectoryNodes(entries);
+  assert.deepEqual(nodes.map(n=>n.role),['user','assistant','user','user']);assert.deepEqual(nodes[1].seqs,[1,2,3]);
+});
+test('tool result failure and interrupted replies remain visible',()=>{
+  const entries=sourceEntries(events(user('执行'),{...ai('未完成'),data:{...ai('未完成').data,interrupted:true}},{type:'tool/result',data:{message:{content:[{type:'text',text:'权限不足'}],isError:true},error:{reason:'access denied'}}},{type:'turn/end',data:{reason:{kind:'aborted'}}}));
+  assert.match(entries[1].text,/中断/);assert.match(entries[2].text,/工具失败/);assert.match(entries[3].text,/aborted/);
+});
+test('long tools include their tail and are folded into one AI node',async()=>{
+  const entries=sourceEntries(events(user('看全部'),ai('开始'),{type:'tool/result',data:{message:{content:[{type:'text',text:'x'.repeat(15000)+'最终失败'}]}}}));
+  let inputs='';const nodes=await analyzeTrajectory(async input=>{inputs+=JSON.stringify(input);return generate(input);},entries);
+  assert.match(inputs,/最终失败/);assert.equal(nodes.length,2);assert.match(nodes[1].summary,/最终失败/);
+});
+test('unknown, duplicate, omitted IDs and invalid JSON are rejected',()=>{
+  const items=[{id:'a'},{id:'b'}];for(const output of ['nope','{"items":[]}',JSON.stringify({items:[{id:'a',summary:'x',details:[]},{id:'a',summary:'y',details:[]}]})])assert.throws(()=>validateOutput(output,items));
+});
+test('route comes from last DSH request and source changes invalidate evidence',()=>{
+  const es=events(ai('result'),{type:'request/header',data:{header:{config:{provider:'new',model:'configured'}}}});
+  assert.deepEqual(routeFrom(es),{provider:'new',model:'configured'});assert.notEqual(fingerprint(sourceEntries(es)),fingerprint(sourceEntries(events(ai('changed')))));
+});
+function harness(){
+  const logs=new Map([['a',{session:{id:'a',createdAt:1,cwd:'/one'},events:events(user('目标'),ai('完成'))}],['b',{session:{id:'b',createdAt:2,cwd:'/two'},events:events(user('另一个'))}],['child',{session:{id:'child',origin:'subagent',createdAt:3},events:[]}]]);
+  const tables={reports:new Map(),versions:new Map()};const domain={table:n=>({get:k=>tables[n].get(k),put:async(k,v)=>tables[n].set(k,structuredClone(v))}),close:async()=>{}};
+  let fail=false,calls=0;
+  const ctx={sessionQuery:{listSessions:async()=>[...logs.values()].map(l=>({header:l.session})),readSession:async id=>{if(!logs.has(id))throw Error('notfound');return structuredClone(logs.get(id));}},workspaceRegistry:{list:()=>[{id:'w1',title:'same',path:'/one',sessionIds:['a','child']},{id:'w2',title:'same',path:'/two',sessionIds:['b']}],archivedSessionIds:['b']},llm:{prepareCall:async config=>({config,async *stream(options){calls++;assert.equal(options.purpose,'collab-journal');assert.equal(options.tools,undefined);if(fail)throw Error('fixture failure');yield {type:'text-delta',index:0,text:await generate(JSON.parse(options.messages[0].content[0].text))};yield {type:'finish',reason:{kind:'stop'}};}})}};
+  return {journal:new Journal(ctx,domain),logs,tables,setFail:()=>{fail=true;},calls:()=>calls};
 }
-test('workspace 完整路径分组，分析与子会话排除，空项目保留',t=>{
-  const {store,config}=setup(t);
-  store.upsertSession({...source,id:'two',directory:'/work/two/app'},[msg('b','user','另一项目',100)]);
-  store.upsertSession({...source,id:'child',parentID:source.id},[]);
-  store.upsertSession({...source,id:'analysis',title:'[collab-review] trajectory'},[]);
-  store.upsertSession({...source,id:'excluded'},[]);store.exclude('excluded');
-  let result=workspaceCatalog(store,config);assert.equal(result.workspaces.length,2);assert.equal(result.workspaces[0].name,result.workspaces[1].name);
-  assert.deepEqual(result.workspaces.flatMap(w=>w.sessions.map(s=>s.id)),['conversation','two']);
-  config.projects=['/work/one/app','/empty'];result=workspaceCatalog(store,config);
-  assert.equal(result.workspaces.length,2);assert.equal(result.workspaces.find(w=>w.directory==='/empty').sessions.length,0);
-  assert.equal(result.workspaces.flatMap(w=>w.sessions).length,1);
+test('catalogue respects native workspace IDs, archive and subagent classification',async()=>{
+  const h=harness(),result=await h.journal.catalog();assert.equal(result.workspaces.length,2);assert.deepEqual(result.workspaces[0].sessions.map(s=>s.id),['a']);assert.equal(result.workspaces[1].sessions[0].archived,true);assert.equal(h.calls(),0);
 });
-test('逐次保留人类发言，合并连续 AI，跨午夜不中断',()=>{
-  const nodes=trajectoryNodes(samples());assert.deepEqual(nodes.map(n=>n.role),['user','assistant','user','user','assistant']);
-  assert.deepEqual(nodes[1].messageIds,['a1','a2']);assert.equal(nodes[1].endedAt-nodes[1].startedAt,90000);
-  assert.deepEqual(nodes.flatMap(n=>n.messageIds),samples().map(m=>m.id));
+test('manual parsing, deduplication, failed rerun and immutable original evidence',async()=>{
+  const h=harness();await h.journal.start('a');const pending=h.journal.active.pending;await h.journal.start('a');await assert.rejects(h.journal.start('b'),/另一个/);await pending;
+  const original=await h.journal.detail('a');assert.equal(original.report.nodes.length,2);assert.equal(original.run.status,'completed');
+  h.logs.get('a').events.push(...events(user('new')).map(e=>({...e,seq:2,time:3000})));assert.equal((await h.journal.detail('a')).report.stale,true);
+  h.setFail();await h.journal.start('a');await h.journal.active.pending;const failed=await h.journal.detail('a');assert.equal(failed.run.status,'failed');assert.equal(failed.report.snapshotId,original.report.snapshotId);
+  const context=await h.journal.context('a',original.report.snapshotId,'n1');assert.equal(context.entries[0].text,'目标');assert.ok(!context.entries.some(e=>e.text==='new'));
 });
-test('解析持久化，快照不随原文漂移，新增内容及失败保留上次结果',async t=>{
-  const {store,config,engine,adapter}=setup(t);
-  assert.equal(trajectoryReport(store,config,source.id),null);
-  const report=await engine.start('trajectory',source.id).done;assert.equal(report.nodes.length,5);assert.equal(trajectoryReport(store,config,source.id).stale,false);
-  const changed=samples();changed[0].parts[0].text='修改后的新原文';store.upsertSession(source,changed);
-  assert.equal(trajectoryReport(store,config,source.id).stale,true);
-  const newer=await engine.start('trajectory',source.id).done;assert.notEqual(newer.snapshotId,report.snapshotId);
-  assert.equal(trajectoryContext(store,config,source.id,'n1',report.snapshotId).messages[0].parts[0].text,'先梳理入口');
-  adapter.analyze=async()=>{throw Object.assign(new Error('模型不可用'),{scope:'global'})};
-  await assert.rejects(engine.start('trajectory',source.id).done,/模型不可用/);assert.deepEqual(store.trajectory(source.id),newer);
-  assert(store.runs().some(r=>r.kind==='trajectory'&&r.status==='failed'));
-  const reopened=new Store(path.join(config.dataDir,'journal.sqlite'));assert.equal(reopened.trajectory(source.id).snapshotId,newer.snapshotId);reopened.close();
-});
-test('长工具输出完整分片，预算受控，末尾失败进入最终节点',async t=>{
-  const {adapter,calls}=setup(t),messages=samples().slice(0,2),text='\\"日志\n'.repeat(9000)+'最终测试失败';
-  messages[1].parts=[{type:'tool',tool:'bash',state:{output:text}}];
-  const nodes=await analyzeTrajectory(adapter,messages,8000);
-  const parts=calls.filter(c=>c.task==='trajectory').flatMap(c=>c.data.items).filter(item=>item.messageId==='a1');
-  assert.equal(parts.map(p=>p.text).join(''),'[工具 bash] '+JSON.stringify({output:text}));
-  assert.match(nodes[1].summary,/最终测试失败/);assert.equal(nodes[1].toolCount,1);assert(calls.every(c=>JSON.stringify(c.data).length<=8000));
-});
-test('拒绝遗漏、重复、伪造与过长摘要，失败释放锁',async t=>{
-  const {engine,adapter,store}=setup(t);
-  for(const kind of ['missing','duplicate','unknown','long']){
-    adapter.analyze=async(_task,data)=>({items:kind==='missing'?[]:data.items.map(item=>({id:kind==='unknown'?'invented':kind==='duplicate'?data.items[0].id:item.id,summary:kind==='long'?'x'.repeat(181):'摘要',details:[]}))});
-    await assert.rejects(engine.start('trajectory',source.id).done,/模型输出校验失败/);assert.equal(store.trajectory(source.id),null);
-  }
-});
-test('同步与浏览不调用模型，并发拒绝，解析期间新消息提示更新',async t=>{
-  const {engine,store,config,adapter,calls}=setup(t);
-  await engine.start('collect').done;workspaceCatalog(store,config);assert.deepEqual(calls.map(c=>c.task),['collect']);
-  let entered,release;const ready=new Promise(r=>entered=r),old=adapter.analyze;let first=true;
-  adapter.analyze=async(...args)=>{if(first){first=false;entered();await new Promise(r=>release=r);}return old(...args)};
-  const job=engine.start('trajectory',source.id);await ready;assert.throws(()=>engine.start('collect'),/正在执行/);
-  store.upsertSession(source,[...samples(),msg('late','assistant','测试最终通过',20)]);release();await job.done;
-  assert.equal(trajectoryReport(store,config,source.id).stale,true);
-});
-test('HTTP 目录、手动任务、原文快照、资源与范围隔离',async t=>{
-  const {config,store,engine,calls}=setup(t),server=createServer(config,store,engine);
-  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
-  const base=`http://127.0.0.1:${server.address().port}`,get=async url=>(await fetch(base+url)).json();
-  assert.equal((await get('/api/workspaces')).workspaces.length,1);assert.equal(await get('/api/trajectories/conversation'),null);assert.equal(calls.length,0);
-  const response=await fetch(base+'/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'trajectory',sessionId:source.id})});assert.equal(response.status,202);
-  const {id}=await response.json();for(let i=0;i<50&&store.runs().find(r=>r.id===id).status==='running';i++)await new Promise(r=>setTimeout(r,5));
-  const report=await get('/api/trajectories/conversation');assert.equal(report.nodes.length,5);
-  assert.equal((await get(`/api/trajectories/conversation/context?node=n2&snapshot=${report.snapshotId}`)).highlight.length,2);
-  assert.equal((await fetch(base+'/trajectories.js')).status,200);assert.equal((await fetch(base+'/trajectory.css')).status,200);
-  assert.equal((await fetch(base+'/api/runs',{method:'POST',headers:{'Content-Type':'application/json',Origin:'http://untrusted.invalid'},body:'{"kind":"collect"}'})).status,403);
-  config.projects=['/elsewhere'];assert.equal((await get('/api/workspaces')).workspaces[0].sessions.length,0);
-  assert.equal((await fetch(base+'/api/trajectories/conversation')).status,400);assert.throws(()=>engine.start('trajectory',source.id),/范围/);
+test('no model route is an explicit failure, not a fake summary',async()=>{
+  const h=harness();await h.journal.start('b');await h.journal.active.pending;assert.equal((await h.journal.detail('b')).run.status,'failed');assert.equal(h.tables.reports.size,0);
 });

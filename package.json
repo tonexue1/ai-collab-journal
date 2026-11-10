@@ -1,19 +1,63 @@
 {
-  "name": "ai-collab-journal",
-  "version": "0.1.0",
-  "private": true,
+  "name": "dsh-collab-journal",
+  "version": "0.2.0",
+  "description": "DSH 原生协作观察插件：按 workspace 浏览会话，手动简化人机轨迹，回查原文。",
   "type": "module",
-  "description": "本地 OpenCode 协作观察日记：可回查原文的每日复盘与每周观察",
-  "engines": { "node": ">=24.0.0" },
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "docs/philosophy.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tonexue1/ai-collab-journal.git"
+  },
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  },
   "scripts": {
-    "start": "node src/cli.mjs serve",
-    "dev": "node src/cli.mjs serve --demo",
-    "demo": "node src/cli.mjs serve --demo",
-    "review": "node src/cli.mjs review",
-    "due": "node src/cli.mjs due",
+    "build": "node scripts/build.mjs",
+    "prepare": "npm run build",
     "test": "node --test test/*.test.mjs",
-    "test:integration": "node test/opencode.integration.mjs",
-    "test:browser": "node test/browser.mjs",
-    "check": "node scripts/check.mjs"
+    "test:integration": "node test/dsh.integration.mjs",
+    "test:browser": "node test/dsh.browser.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.1",
+    "react": "^18.3.1"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.4",
+    "react": "^18.3.1"
   }
 }

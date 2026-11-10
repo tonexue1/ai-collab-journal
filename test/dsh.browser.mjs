@@ -1,0 +1,39 @@
+import assert from 'node:assert/strict';
+import { mkdir,writeFile } from 'node:fs/promises';
+import { resolve,join } from 'node:path';
+import { createRuntime } from './dsh-runtime.mjs';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+const output=resolve(process.env.BROWSER_REPORT_DIR||'test-results/browser');await mkdir(output,{recursive:true});
+const runtime=await createRuntime();let browser,page;const errors=[];
+try{
+  await runtime.start();browser=await chromium.launch({headless:true,...process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{}});
+  const context=await browser.newContext({viewport:{width:1500,height:1050},locale:'zh-CN'});
+  await context.addCookies(runtime.cookie.split('; ').map(c=>{const i=c.indexOf('=');return {name:c.slice(0,i),value:c.slice(i+1),url:runtime.base};}));
+  page=await context.newPage();page.on('pageerror',e=>errors.push(e.stack||e.message));
+  await page.goto(runtime.base);await page.getByRole('button',{name:'协作观察',exact:true}).click({timeout:60000});
+  await page.locator('[data-testid=journal]').waitFor();
+  await page.locator('.cj-workspaces button[title$="harmony"]').click();
+  await page.getByRole('heading',{name:'统一流量购买 H5 跳转',exact:true}).waitFor();
+  await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
+  assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
+  await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
+  await page.locator('.cj-timeline').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
+  await page.screenshot({path:join(output,'dsh-journal-desktop.png'),fullPage:true});
+  await page.getByRole('button',{name:'查看原文'}).nth(1).click();
+  await page.locator('.cj-source').first().waitFor();assert.match(await page.locator('.cj-evidence').innerText(),/TAIL_EVIDENCE/);
+  await page.screenshot({path:join(output,'dsh-journal-context.png'),fullPage:true});
+  await runtime.api('append',{},'journal-test');await page.getByRole('button',{name:'刷新会话'}).click();
+  // Reopen the session to verify source revision refresh, then a failed rerun retains its timeline.
+  await page.locator('.cj-workspaces button[title$="android"]').click();await page.getByRole('heading',{name:'检查 Android Push API',exact:true}).waitFor();
+  assert.equal(await page.locator('.cj-node').count(),0);
+  await page.locator('.cj-workspaces button[title$="harmony"]').click();await page.locator('.cj-notice').waitFor();
+  await runtime.api('fail',{value:true},'journal-test');await page.getByRole('button',{name:'重新解析',exact:true}).click();
+  await page.locator('.cj-reader .cj-alert').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
+  await page.getByRole('textbox',{name:'搜索会话'}).fill('不会匹配的标题');await page.getByText('没有匹配的会话',{exact:true}).waitFor();
+  assert.equal(await page.locator('.cj-node').count(),0);await page.getByRole('textbox',{name:'搜索会话'}).fill('');await page.locator('.cj-timeline').waitFor();
+  await page.setViewportSize({width:560,height:1000});await page.screenshot({path:join(output,'dsh-journal-narrow.png'),fullPage:true});
+  assert.ok(await page.locator('.cj-root').evaluate(e=>e.scrollWidth<=e.clientWidth+1),'plugin must fit native narrow main pane');
+  assert.deepEqual(errors,[],'native page must not throw');
+  console.log('Native DSH sidebar, real client loader, manual parse, context, workspace switch, failure state, search, narrow layout passed.');
+}catch(error){if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(join(output,'failure.html'),await page.content());}await writeFile(join(output,'browser-errors.txt'),errors.join('\n'));console.error(runtime.log);throw error;}
+finally{await browser?.close();await runtime.stop();}

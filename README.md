@@ -1,160 +1,76 @@
-# 协作观察 / AI Collaboration Journal
+# 协作观察 · DSH Collab Journal
 
-每天用 5—10 分钟核对 AI 协作事件、回看当时的上下文、写下自己的思考。每周再从真实记录中寻找重复模式。
+**DeepSeek Harness 原生插件。数据来自 DSH 会话，界面在 DSH 内，解析使用 DSH 配置的模型。**
 
-我们希望从真实协作中看清自己承担的工作，把零散经验变成可核对、可积累、可验证的认识。先观察和理解，再决定什么值得优化。项目的出发点、产品原则与验收标准见 [为什么做协作观察](docs/philosophy.md)。
+把一段长对话简化为「人 → AI → 人 → AI」的协作轨迹。先看清事情怎样发生，再形成自己的认识。[为什么做这个项目](docs/philosophy.md)
 
-**本地应用，首版 v0.1。** Node.js 24+，SQLite，浏览器界面；无第三方运行时依赖，无需 Docker 或虚拟化。OpenCode 历史、日记和批注保存在本机 `data/`，不会提交到 Git。分析会通过现有 OpenCode 模型配置发送材料到对应模型服务。
+## 这一版
 
-## 快速启动
+- DSH 侧栏「协作观察」，按原生 workspace ID 和会话归属分类。同名 workspace 不合并。
+- 人工选择会话，点击「解析轨迹」。浏览、刷新不会调用模型。
+- 每次真人发言独立保留，连续 AI 回复与工具行动合并；自动注入的 `user/message` 不误算为人。
+- 阅读完整会话，包含老会话今天新增的内容、工具结果和失败信息。长日志分片处理，不丢尾部。
+- 节点可展开摘要细节和原始上下文，包含原事件序号、时间、JSON 与相邻消息。
+- 使用这段会话最近一次模型路由，凭证仍由 DSH 管理。
+- 解析中显示进度，可停止；失败保留旧结果；会话变化时提示重新解析。
+- 结果和原文快照保存在 DSH 的 storage domain，重启后仍可阅读。
 
-先安装 [Node.js 24 LTS](https://nodejs.org/)；本机需已安装并配置可正常运行的 OpenCode。
+当前聚焦手动轨迹解析。自动筛选、定时日报、周总结是后续能力；本版不生成“下一次应该怎样做”的建议。
 
-```powershell
-# 在本项目目录执行，无需 npm install
-Copy-Item config.example.json config.json
-# 编辑 config.json：projects 填入需要回顾的项目目录，例如 ["C:/work/app"]
-node src/cli.mjs doctor
-npm start
+## 安装
+
+要求 Node.js **24.9+**、DSH **0.2.2-rc.1**。首次安装前更新 DSH 到兼容版本。这一版已对该 DSH 版本进行测试；其他版本需要重新验证。
+
+在本仓库目录执行（PowerShell / bash 均可）：
+
+```sh
+git pull
+npm ci
+npm pack
+dsh plugin --profile web add ./dsh-collab-journal-0.2.0.tgz
+dsh web
 ```
 
-浏览器打开 **http://127.0.0.1:4318**，默认进入“会话轨迹”。点击“同步会话”，按 workspace 选择会话，再点“解析轨迹”。
+已有 DSH Web 实例时，安装后重启它。在左侧点击「协作观察」，选择 workspace、会话，再点击「解析轨迹」。这是安装到 DSH 的插件，无独立服务启动步骤。
 
-“每日日记”仍可选择日期、点击“生成日记”。首次可先回顾今天；今天的报告会标为暂稿，次日补齐为完整日记。
+`web` 指 DSH 的 Web profile。你运行自定义 profile 时，把安装命令的 `web` 替换为对应名称。桌面版请在该 DSH 实例的 **插件管理 → 添加插件** 中填写本地构建后仓库的绝对路径，安装到桌面实例；CLI 的 web profile 与桌面 profile 不共享安装。桌面壳本身尚未做自动化验收。
 
-想先看界面而不调用模型：
+仓库尚未发布 npm 包，请使用上面的本地打包安装，不能直接运行 `dsh plugin add dsh-collab-journal`。升级后重新构建、打包、安装并重启即可。
 
-```powershell
-npm run demo
+卸载 Web 插件：
+
+```sh
+dsh plugin --profile web remove dsh-collab-journal
 ```
 
-演示使用独立的 `data/demo/` 数据库，页面明确标记，示例为合成内容，不能作为真实工作记录。同一个端口不能同时运行正式与演示服务。
+## 使用与数据
 
-## 会话轨迹：手动解析
+模型由源会话最后一个 `request/header` 决定，旧记录则回退到最后一个模型回复的来源。模型已移除时会明确失败，请在 DSH 恢复该路由或用可用模型继续一次对话。没有模型记录的空会话须先完成一次 DSH 对话。
 
-- **按 workspace 分组**：使用会话的工作目录，显示完整路径以区分同名项目。支持标题/路径搜索，以及未解析、已解析、有新内容的状态筛选。
-- **同步与解析分开**：同步只读取已配置项目的 OpenCode 历史，不调用模型、不自动筛选价值。选中会话后手动点击“解析轨迹”；未解析时也能浏览完整原文。
-- **保留人机顺序**：每次人的发言独立成节点；两次人的发言之间，AI 连续回复与工具操作合并展示。按整段会话解析，跨天不截断。
-- **按需展开**：默认展示简短摘要，可展开细节和节点原文；原文包含相邻上下文与完整工具结果。摘要不生成优化建议。
-- **持续保存**：重启后仍可查看已生成轨迹。同步发现消息新增或内容变化会提示更新，点击重新解析；失败保留上次成功结果及其原文快照。
+解析会把所选会话的可读文本发送到该 DSH 模型服务，与 DSH 当前模型配置的数据流相同。插件不读取 OpenCode 数据，不另存 API Key，不执行历史对话里的指令，也不向解析模型开放工具。
 
-当前数据源仍为 **OpenCode**，未接入 DSH 日志。界面组织参考 dsh-context 的 workspace 概览与逐层展开思路。轨迹解析不会被现有夜间 `due` 自动触发；已安装的日/周复盘任务继续沿用原有行为。
+插件数据使用 `dsh_collab_journal` domain，由 DSH 管理；默认 JSON 后端位于 `$DSH_HOME/storages/dsh_collab_journal.json`。原始 DSH 会话保持不变。每次成功解析保存新结果；原文快照按会话和内容指纹版本化，以免旧摘要引用了新消息。卸载不会主动删除这些记录。
 
-## 已实现
+## 验证
 
-- 按北京时间的**消息时间**筛选当天交流，包含旧会话当天新增的消息。
-- 通过官方 CLI 列出和导出会话；自动探测 `opencode export` 或 `opencode session export`。
-- 在独立工作目录调用 OpenCode 现有模型，禁用分析会话工具权限，提取事件并汇总日记。
-- 每个事件引用真实会话 ID 和消息 ID；拒绝不存在的引用和仅依靠旧消息构造的当天事件。
-- 保存该次分析的原文快照；查看前后文、跨日背景、完整会话和工具结果。
-- 手动修正分类、事实与结果，排除误判、写批注、标记周总结关注项。可从“当天对话”浏览未被 AI 选中的材料并补记事件；重跑保留人工补记和同一事件的修正。
-- 同一轮任务的跨日助手/工具结果会参与原日期分析；夜间采集后检查材料变化，刷新受影响的旧日报。长片段携带已有事件继续分析并更新结果。
-- 日/周概况在人工判断变化后提示待更新；周总结保存当时的事件及原文依据，可以回看历史版本。
-- 每周总结引用跨日事件，至少两天的证据才能形成模式；明确显示缺失日期。
-- Windows 北京时间每天 02:00 调度，漏跑补齐，重复运行不重复生成完整日报。
-- SQLite 跨进程锁、失败记录、失败不覆盖已有日记、Markdown 导出。
-
-## 配置
-
-复制 `config.example.json` 为 `config.json`，按需修改：
-
-| 字段 | 说明 |
-|---|---|
-| `opencodeCommand` | CLI 命令或绝对路径；计划任务建议使用绝对路径 |
-| `model` | 空值沿用默认模型，或填 `provider/model` |
-| `projects` | 自动采集必填。填需要回顾的项目绝对路径，例如 `["C:/work/app", "C:/work/sdk"]`；程序逐个目录执行 CLI，再按会话的 `directory` 精确匹配。空数组只适用于演示或手动导入分析 |
-| `startDate` | 补跑起点；空值在首次运行时记录为当天，不追补更早历史 |
-| `dataDir` | 数据目录，默认 `./data`，相对项目根目录解析 |
-| `port` | 本地网页端口，默认 4318 |
-| `maxInputChars` | 单个分析片段的字符预算，默认 28000；字符预算不是 token 数 |
-| `timeoutMs` | 单次 OpenCode 运行超时，默认 10 分钟 |
-| `maxSessions` | 会话枚举上限；达到上限会报错，不当作完整采集 |
-
-分析目录使用 OpenCode 全局模型连接，不自动继承业务项目的 `opencode.json`。仅项目级 provider 请先配置到 OpenCode 全局连接；不要把业务项目的插件或权限整体复制进分析目录。`doctor` 显示分析位置解析出的模型标识与配置范围，不输出连接凭证；它不调用模型，不能验证认证或额度。
-
-复盘口径在 `review-rules.md`，可单独调整。模型按明确 JSON 结构输出，程序二次校验。`--format json` 是 OpenCode 的**事件流**格式，不代表模型已返回符合业务结构的 JSON。
-
-## 手动执行
-
-```powershell
-node src/cli.mjs review --date 2026-11-07
-node src/cli.mjs weekly --start 2026-11-02  # 周一
-node src/cli.mjs due                      # 补齐从起点到昨天，并处理已结束的周
-```
-
-不用打开网页也能运行。网页与定时任务共用一个数据库，禁止同时跑两个复盘任务。
-
-已有导出文件时：
-
-```powershell
-node src/cli.mjs import --file C:\path\session.json
-node src/cli.mjs review --date 2026-11-07 --offline
-```
-
-`--offline` **只表示不重新采集**，分析仍调用 OpenCode 和其模型。导入格式为 `{ "info": { "id": "..." }, "messages": [{ "info": { "id": "...", "role": "user", "time": { "created": 0 } }, "parts": [...] }] }`，时间需要实际有效值。页面也支持导入。
-
-## Windows 凌晨定时
-
-先手动验证一次真实日记，再安装任务：
-
-```powershell
-.\scripts\install-schedule.ps1
-Get-ScheduledTaskInfo -TaskName AI-Collab-Journal
-Start-ScheduledTask -TaskName AI-Collab-Journal
-```
-
-任务的 StartBoundary 明确为 `02:00:00+08:00`，无需更改系统时区。任务直接运行 Node，使用当前用户和固定工作目录；程序内部按 `Asia/Shanghai` 计算日期。安装脚本会输出下一次运行的北京时间，请在本机核对。
-
-- **当前用户需要保持登录**，锁屏可以；注销后需等下次登录补跑，不索取用户密码。
-- 默认请求唤醒睡眠中的电脑，可用 `-NoWake` 关闭；实际是否唤醒取决于 Windows/硬件电源策略。关机不能运行。
-- 开启错过任务后尽快运行。补跑只从配置起点开始，今天暂稿不会被误认为完整日报。
-- 一次补跑共用一次采集；某日材料处理失败会记录并继续其他日期，整批保留失败状态。采集或模型服务等全局故障会停止整批，避免逐日重复请求。
-- 每天任务完成日报后，检查是否有已结束但尚未生成的周；周一会处理上周。
-- 日志为 `data/schedule.log`，运行明细也在页面“运行记录”。源对话内容不写入运行日志。
-- 企业执行策略若阻止 PowerShell，请按组织要求处理；本脚本不修改系统执行策略。
-
-```powershell
-Disable-ScheduledTask -TaskName AI-Collab-Journal
-Enable-ScheduledTask -TaskName AI-Collab-Journal
-Unregister-ScheduledTask -TaskName AI-Collab-Journal
-```
-
-## 数据与边界
-
-- `data/journal.sqlite`：原文、分析快照、日报、事件、独立批注、周总结、任务状态。
-- `data/daily/YYYY-MM-DD.md`：日记导出；网页批注保存时同步更新。**数据库中的批注是事实来源，外部手改导出文件不会回写。**
-- `data/weekly/周一日期.md`：周总结导出。
-- `data/analysis-workspace/`：隔离分析会话的工作目录。材料通过标准输入发送，不经过 shell 参数或附件读取；OpenCode 自身仍会保存分析会话，用前缀和 ID 排除。
-- 不默认实时监听或改动开发会话；v0.1 每次导出选定会话，优先完整性。历史很多时建议限制项目范围。
-- 子代理会话不能可靠视为人发出的消息，因此保留其原文但不独立归纳为人的介入。暂未实现跨子会话自动追溯。
-- 原会话中已经被删除或压缩清理的内容无法凭空恢复；图片、视频等附件只显示元信息。
-- 长消息分段保留；超出日/周汇总预算会失败并提示，避免静默丢失。复杂跨片段事件仍可能归纳不准，需人工核对。
-- 事件锚点变化时，不猜测旧修正归属；旧批注保留在历史区。依据版本变化会提示重看。旧版程序生成的周总结没有当时的事件快照，重新生成后才开始保留可回查的版本。
-- 工具权限全拒绝仅适用于本工具创建的分析目录，不更改全局 OpenCode 配置。
-- 只监听本机地址；正式模式校验 Host 和 Origin。不要把服务直接暴露到公网。
-
-## 验证与当前状态
-
-```powershell
-npm run check
+```sh
+npm ci
 npm test
-```
-
-37 项单元及 HTTP 回归测试覆盖跨日结果回补、长日志结局、明确纠错与补漏、冻结周证据、概况过期、保存竞态、失败隔离，以及原有的日期、采集、并发锁和 CLI 兼容行为。
-
-另外提供真实 OpenCode 集成测试：
-
-```powershell
-npm install --global opencode-ai@1.1.48
+npm install --prefix .dsh-test/runtime --no-save @deepseek-ai/dsh@0.2.2-rc.1
 npm run test:integration
+npm install --no-save --package-lock=false playwright@1.62.1
+npx playwright install chromium
+npm run test:browser
 ```
 
-测试使用隔离的 XDG 目录、两个临时 Git 项目、真实 OpenCode CLI 和本地固定响应的模型接口。验证会话创建/续聊/导入导出、跨项目采集、默认模型的 stdin 输入、日报/周报、HTTP 原文与批注、失败保留。它不会读取本机历史或使用真实模型凭证；不验证模型理解能力。也可通过 `OPENCODE_TEST_BIN` 指向已有的 CLI。不要为测试降级日常使用的 OpenCode，版本矩阵可直接看 GitHub Actions。
+集成测试实际启动已安装的 DSH，在隔离的 `DSH_HOME` 中通过 `dsh plugin --profile web add` 安装本项目 tarball，使用 DSH 原生 session/workspace/persistence/LLM/storage 服务。覆盖跨日旧会话、合并边界、长工具日志尾部、快照、失败重试、鉴权和重启后的持久会话读取。浏览器测试在真实 DSH 页面中点击原生侧栏入口、解析、展开原文、切换 workspace、搜索并检查窄布局。
 
-CI 矩阵为 Windows/Linux × OpenCode 1.1.48/1.19.5；Windows 另安装独立任务，核对凌晨 02:00 配置后，将该临时任务改为 15 秒后的时间触发，验证实际执行 `due`，完成后清理。
+测试模型是通过 DSH LLM 服务注册的确定性适配器，用于验证协议和链路，不代表真实模型的摘要质量。真实模型质量需要结合你的会话核对。
 
-浏览器 CI 使用合成材料验证延迟保存时继续输入、修正持久化、排除误判、浏览原文并补记、冻结周证据和手机宽度布局。可安装仅供测试的 Playwright 1.62.1 后运行 `npm run test:browser`；日常使用应用不需要它。
+## 当前限制
 
-页面已经实际验证生成、完整原文、保存与重跑保留批注。**真实托管模型的语义效果仍未验收**：远端免费模型探测收到 `429 FreeUsageLimitError`，没有将协议测试冒充真实 LLM 测试。各平台执行结果以仓库 Actions 为准；本机睡眠唤醒和企业策略仍需现场核对。
+仅解析文本。附件保留类型提示与原事件引用，不识别图片、音频内容。模型归纳仍可能失真，摘要与事实应通过原文核对。工具已经在 DSH 日志中被截断的部分无法恢复。
 
-架构与后续维护见 [docs/architecture.md](docs/architecture.md)。
+目录刷新会读取会话日志；会话数量很大时会较慢。当前一次只解析一个会话，每次调用 90 秒、整体 10 分钟超时。历史快照暂不自动清理。日报、周报、批注暂未移植到此插件版本；原独立应用保留在 Git 历史中。
+
+[架构与边界](docs/architecture.md) · [项目哲学](docs/philosophy.md)

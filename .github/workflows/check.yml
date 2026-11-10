@@ -1,9 +1,9 @@
-name: Check
+name: DSH plugin checks
 on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  test:
+  unit:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
@@ -13,14 +13,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm run check
+          cache: npm
+      - run: npm ci
       - run: npm test
-  opencode-integration:
+  dsh-integration:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        opencode: ['1.1.48', '1.19.5']
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -28,35 +28,40 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm install --global opencode-ai@${{ matrix.opencode }}
+          cache: npm
+      - run: npm ci
+      - run: npm install --prefix .dsh-test/runtime --no-save @deepseek-ai/dsh@0.2.2-rc.1
       - run: npm run test:integration
-  windows-scheduler:
-    runs-on: windows-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Verify real Windows scheduled execution
-        shell: pwsh
-        run: ./test/windows-schedule.ps1
   browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm install --prefix .dsh-test/runtime --no-save @deepseek-ai/dsh@0.2.2-rc.1
       - run: npm install --no-save --package-lock=false playwright@1.62.1
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
-        env:
-          BROWSER_REPORT_DIR: test-results/browser
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: browser-screenshots
+          name: dsh-browser-screenshots
           path: test-results/browser
           if-no-files-found: ignore
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci
+      - run: npm pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-collab-journal
+          path: dsh-collab-journal-*.tgz

@@ -11,3 +11,6 @@ test-results/
 .DS_Store
 *.zip
 .openai/
+lib/
+*.tgz
+.dsh-test/
