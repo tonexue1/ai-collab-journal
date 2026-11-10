@@ -9,8 +9,10 @@ try{
   await runtime.start();browser=await chromium.launch({headless:true,...process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{}});
   const context=await browser.newContext({viewport:{width:1500,height:1050},locale:'zh-CN'});
   await context.addCookies(runtime.cookie.split('; ').map(c=>{const i=c.indexOf('=');return {name:c.slice(0,i),value:c.slice(i+1),url:runtime.base};}));
-  page=await context.newPage();page.on('pageerror',e=>errors.push(e.stack||e.message));
-  await page.goto(runtime.base);await page.getByRole('button',{name:'协作观察',exact:true}).click({timeout:60000});
+  page=await context.newPage();page.setDefaultTimeout(30000);page.on('pageerror',e=>errors.push(e.stack||e.message));
+  await page.goto(runtime.base);
+  await page.getByRole('button',{name:'继续',exact:true}).click({timeout:60000});
+  await page.getByRole('button',{name:'协作观察',exact:true}).click({timeout:60000});
   await page.locator('[data-testid=journal]').waitFor();
   await page.locator('.cj-workspaces button[title$="harmony"]').click();
   await page.getByRole('heading',{name:'统一流量购买 H5 跳转',exact:true}).waitFor();
