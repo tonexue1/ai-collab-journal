@@ -23,8 +23,24 @@ try{
   assert.match(await page.locator('.cj-build').innerText(),new RegExp(`界面 ${runtime.pluginVersion.replaceAll('.','\\.')} / ${build.id}`));
   await page.locator('.cj-workspaces button[title$="harmony"]').click();
   await page.getByRole('heading',{name:'统一流量购买 H5 跳转',exact:true}).waitFor();
-  await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
+  await page.locator('.cj-expression-card').nth(1).waitFor();
+  assert.equal(await page.locator('.cj-expression-card').count(),2);
+  assert.equal(await page.locator('.cj-primary').count(),0,'reading expressions must not require a full parse');
+  assert.match(await page.locator('.cj-expression-card').first().innerText(),/会话起点/);
+  assert.equal(await page.locator('.cj-human .cj-expression-text').first().innerText(),'流量购买的 H5 跳转方式应该收敛。');
+  assert.match(await page.locator('.cj-expression-card').nth(1).locator('.cj-prior').innerText(),/发现三个跳转入口，需要确认统一的范围/);
+  await page.getByRole('button',{name:'看这次介入之前',exact:true}).click();
+  await page.locator('.cj-interaction-context .cj-source').first().waitFor();
+  assert.match(await page.locator('.cj-interaction-context').innerText(),/TAIL_EVIDENCE/);
+  assert.doesNotMatch(await page.locator('.cj-interaction-context').innerText(),/FUTURE_RESULT_AFTER_INTERVENTION/);
+  assert.match(await page.locator('.cj-interaction-context .cj-highlight').innerText(),/不是只改安卓，鸿蒙也要统一/);
+  await page.locator('.cj-expression-card').nth(1).getByRole('button',{name:'查看后续',exact:true}).click();
+  await page.locator('.cj-interaction-context .cj-source').first().waitFor();
+  assert.match(await page.locator('.cj-interaction-context').innerText(),/FUTURE_RESULT_AFTER_INTERVENTION/);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
+  await page.screenshot({path:join(output,'dsh-journal-expressions.png'),fullPage:true});
+  await page.getByRole('button',{name:'完整轨迹',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
   await runtime.api('malformed',{value:1},'journal-test');
   // Hold the model so navigation must occur before completion. Returning to
   // the session must synchronize the catalogue without clicking Refresh.
@@ -32,6 +48,10 @@ try{
   await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
   await page.locator('.cj-progress').waitFor();
   assert.equal((await runtime.api('detail',{id:'journal-test-a'})).run.status,'running');
+  await page.getByRole('button',{name:'我的表达',exact:true}).click();
+  await page.locator('.cj-expression-card').nth(1).waitFor();
+  assert.match(await page.locator('.cj-task-notice').innerText(),/完整轨迹正在解析/);
+  await page.getByRole('button',{name:'完整轨迹',exact:true}).click();
   await page.locator('.cj-workspaces button[title$="android"]').click();
   await page.getByRole('heading',{name:'检查 Android Push API',exact:true}).waitFor();
   assert.equal((await runtime.api('detail',{id:'journal-test-a'})).run.status,'running');
@@ -40,8 +60,7 @@ try{
   await page.locator('.cj-workspaces button[title$="harmony"]').click();
   await page.locator('.cj-timeline').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
   await page.locator('.cj-session[aria-pressed="true"] .cj-status-ready').waitFor();
-  assert.equal(await page.locator('.cj-session[aria-pressed="true"] .cj-status').innerText(),'已解析');
-  assert.equal(await page.locator('.cj-overview > span').filter({hasText:'已解析'}).innerText(),'1 已解析');
+  assert.equal(await page.locator('.cj-session[aria-pressed="true"] .cj-status').innerText(),'完整轨迹 · 已解析');
   await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
   await page.screenshot({path:join(output,'dsh-journal-desktop.png'),fullPage:true});
   await page.emulateMedia({colorScheme:'dark'});
@@ -50,7 +69,18 @@ try{
   await page.getByRole('button',{name:'查看原文'}).nth(1).click();
   await page.locator('.cj-source').first().waitFor();assert.match(await page.locator('.cj-evidence').innerText(),/TAIL_EVIDENCE/);
   await page.screenshot({path:join(output,'dsh-journal-context.png'),fullPage:true});
-  await runtime.api('append',{},'journal-test');await page.getByRole('button',{name:'刷新会话'}).click();
+  await page.getByRole('button',{name:'我的表达',exact:true}).click();
+  await page.locator('.cj-expression-card').nth(1).waitFor();
+  const callsBeforeReading=(await runtime.api('status',{},'journal-test')).calls;
+  await runtime.api('append',{},'journal-test');
+  await page.getByRole('button',{name:'看这次介入之前',exact:true}).click();
+  await page.locator('.cj-interaction-context .cj-alert').waitFor();
+  assert.match(await page.locator('.cj-interaction-context .cj-alert').innerText(),/会话已更新，请刷新后查看/);
+  await page.locator('.cj-interaction-context').getByRole('button',{name:'刷新会话',exact:true}).click();
+  await page.locator('.cj-expression-card').nth(2).waitFor();
+  assert.equal(await page.locator('.cj-expression-card').count(),3);
+  assert.equal((await runtime.api('status',{},'journal-test')).calls,callsBeforeReading,'refreshing expressions must not invoke the model');
+  await page.getByRole('button',{name:'完整轨迹',exact:true}).click();
   // Reopen the session to verify source revision refresh, then a failed rerun retains its timeline.
   await page.locator('.cj-workspaces button[title$="android"]').click();await page.getByRole('heading',{name:'检查 Android Push API',exact:true}).waitFor();
   assert.equal(await page.locator('.cj-node').count(),0);
@@ -93,6 +123,6 @@ try{
   await page.waitForFunction(()=>document.querySelector('.cj-session-list').scrollTop>0);
   await page.screenshot({path:join(output,'dsh-journal-list-scroll.png'),fullPage:true});
   assert.deepEqual(errors,[],'native page must not throw');
-  console.log('Native DSH sidebar, real client loader, manual parse, context, workspace switch, failure state, search, narrow layout passed.');
+  console.log('Native DSH sidebar, immediate human expressions and prior context without model calls, revision refresh, full timeline, manual parse, workspace switch, failure state, search, narrow layout passed.');
 }catch(error){if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(join(output,'failure.html'),await page.content());}await writeFile(join(output,'browser-errors.txt'),errors.join('\n'));console.error(runtime.log);throw error;}
 finally{await browser?.close();await runtime.stop();}

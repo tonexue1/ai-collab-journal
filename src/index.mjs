@@ -14,6 +14,8 @@ export async function apply(ctx){
       let value;
       if(body.action==='catalog')value=await journal.catalog();
       else if(body.action==='detail')value=await journal.detail(body.id);
+      else if(body.action==='interactions')value=await journal.interactions(body.id);
+      else if(body.action==='interactionContext')value=await journal.interactionContext(body.id,body.interactionId,body.revision,body.side,body.offset,body.limit);
       else if(body.action==='parse')value=await journal.start(body.id);
       else if(body.action==='cancel')value=journal.cancel(body.id);
       else if(body.action==='context'){

@@ -31,7 +31,7 @@ test('route comes from last DSH request and source changes invalidate evidence',
 });
 function harness(){
   const logs=new Map([['a',{session:{id:'a',createdAt:1,cwd:'/one'},events:events(user('目标'),ai('完成'))}],['b',{session:{id:'b',createdAt:2,cwd:'/two'},events:events(user('另一个'))}],['child',{session:{id:'child',origin:'subagent',createdAt:3},events:[]}]]);
-  const tables={reports:new Map(),versions:new Map()};const domain={table:n=>({get:k=>tables[n].get(k),put:async(k,v)=>tables[n].set(k,structuredClone(v))}),close:async()=>{}};
+  const tables={reports:new Map(),versions:new Map(),checkpoints:new Map()};const domain={table:n=>({get:k=>tables[n].get(k),put:async(k,v)=>tables[n].set(k,structuredClone(v)),delete:async k=>tables[n].delete(k)}),close:async()=>{}};
   let fail=false,calls=0,response=generate;
   const ctx={sessionQuery:{listSessions:async()=>[...logs.values()].map(l=>({header:l.session})),readSession:async id=>{if(!logs.has(id))throw Error('notfound');return structuredClone(logs.get(id));}},workspaceRegistry:{list:()=>[{id:'w1',title:'same',path:'/one',sessionIds:['a','child']},{id:'w2',title:'same',path:'/two',sessionIds:['b']}],archivedSessionIds:['b']},llm:{prepareCall:async config=>({config,async *stream(options){calls++;assert.equal(options.purpose,'collab-journal');assert.equal(options.tools,undefined);if(fail)throw Error('fixture failure');yield {type:'text-delta',index:0,text:await response(JSON.parse(options.messages[0].content[0].text))};yield {type:'finish',reason:{kind:'stop'}};}})}};
   return {journal:new Journal(ctx,domain),logs,tables,setFail:()=>{fail=true;},setResponse:f=>{response=f;},calls:()=>calls};

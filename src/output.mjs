@@ -12,12 +12,22 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 const normalize = text => text.replace(/\s+/g, ' ').trim();
 
 export function validateOutput(text, items) {
-  let value;
+  let value,source;
   try {
-    value = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+    source = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    value = JSON.parse(source);
   } catch {
+    // Observed provider output ended after its final complete item, omitting
+    // only the outer ]}. Add no content: incomplete strings/inner containers
+    // still cannot parse, and every required item/field must already exist.
+    if(source?.endsWith('}'))try {
+      const candidate=JSON.parse(source+']}');
+      if(object(candidate)&&Object.keys(candidate).length===1&&Object.hasOwn(candidate,'items')
+        &&Array.isArray(candidate.items)&&candidate.items.length===items.length
+        &&candidate.items.every(x=>object(x)&&Object.hasOwn(x,'id')&&Object.hasOwn(x,'summary')&&Object.hasOwn(x,'details')&&Array.isArray(x.details)))value=candidate;
+    }catch{}
     // JSON.parse errors may contain private excerpts from the response.
-    throw new OutputValidationError([{path: '$', code: 'INVALID_JSON', message: '必须返回完整 JSON 对象'}]);
+    if(value===undefined)throw new OutputValidationError([{path: '$', code: 'INVALID_JSON', message: '必须返回完整 JSON 对象'}]);
   }
   if (!object(value) || !Array.isArray(value.items)) {
     throw new OutputValidationError([{path: 'items', code: 'INVALID_ITEMS', message: '必须是数组'}]);
