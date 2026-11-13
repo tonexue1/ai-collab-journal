@@ -1,5 +1,6 @@
 import { analyzeTrajectory, fingerprint, routeFrom, sourceEntries, contentText } from './trajectory.mjs';
 import { modelGenerator } from './model.mjs';
+import { OutputValidationError } from './output.mjs';
 
 export class JournalError extends Error {constructor(message,status=400){super(message);this.status=status;}}
 export class Journal {
@@ -44,7 +45,7 @@ export class Journal {
     if(this.active){if(this.active.id===id)return this.runs.get(id);throw new JournalError('另一个会话正在解析，请稍后再试',409);}
     // Claim before the first await; double clicks cannot start competing writes.
     const abort=new AbortController();this.active={id,abort};
-    const run={id,status:'running',stage:'读取 DSH 原始会话',startedAt:Date.now()};this.runs.set(id,run);
+    const run={id,status:'running',stage:'读取 DSH 原始会话',startedAt:Date.now(),modelCalls:0};this.runs.set(id,run);
     const pending=this.execute(id,abort,run);
     this.active.pending=pending;
     return {...run};
@@ -54,14 +55,26 @@ export class Journal {
       const signal=AbortSignal.any([abort.signal,AbortSignal.timeout(10*60*1000)]);
       const log=await this.source(id),route=routeFrom(log.events);
       if(!route)throw new Error('此会话没有可复用的模型；请先在 DSH 中选择模型并完成一次对话');
-      const nodes=await analyzeTrajectory(modelGenerator(this.ctx.llm,route,id),log.entries,stage=>{run.stage=stage;},signal);
+      run.route=route;
+      const generate=modelGenerator(this.ctx.llm,route,id);
+      const nodes=await analyzeTrajectory((input,signal)=>{run.modelCalls++;return generate(input,signal);},log.entries,stage=>{run.stage=stage;},signal);
       signal.throwIfAborted();
+      run.stage='保存轨迹与原文快照';
       const report={sessionId:id,snapshotId:fingerprint(log.entries),generatedAt:Date.now(),route,nodes,entries:log.entries};
       // Save immutable evidence before publishing the new latest pointer.
       await this.domain.table('versions').put(`${id}.${report.snapshotId}`,report);
       signal.throwIfAborted();await this.domain.table('reports').put(id,report);
       run.status='completed';run.stage='解析完成';
-    } catch(error){run.status=abort.signal.aborted?'cancelled':'failed';run.error=error.name==='TimeoutError'?'解析超时，已有结果已保留':error.message;run.stage='已有结果已保留';}
+    } catch(error){
+      run.status=abort.signal.aborted?'cancelled':'failed';
+      run.error=error.name==='TimeoutError'?'解析超时':error.message;
+      run.diagnostic={code:error.code||error.name||'PARSE_FAILED',stage:run.stage,route:run.route,modelCalls:run.modelCalls,elapsedMs:Date.now()-run.startedAt};
+      if(error instanceof OutputValidationError){
+        Object.assign(run.diagnostic,{attempts:error.attempts,issues:error.issues});
+        // This error's message and stack contain only our structural diagnostics.
+        console.warn('[dsh-collab-journal]',JSON.stringify({...run.diagnostic,stack:error.stack}));
+      }
+    }
     finally {run.finishedAt=Date.now();this.active=null;}
   }
   async context(id,snapshotId,nodeId){

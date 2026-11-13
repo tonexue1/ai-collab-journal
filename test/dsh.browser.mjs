@@ -21,6 +21,7 @@ try{
   await page.getByRole('heading',{name:'统一流量购买 H5 跳转',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
+  await runtime.api('malformed',{value:1},'journal-test');
   await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
   await page.locator('.cj-timeline').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
   await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
@@ -35,6 +36,14 @@ try{
   // Reopen the session to verify source revision refresh, then a failed rerun retains its timeline.
   await page.locator('.cj-workspaces button[title$="android"]').click();await page.getByRole('heading',{name:'检查 Android Push API',exact:true}).waitFor();
   assert.equal(await page.locator('.cj-node').count(),0);
+  await runtime.api('malformed',{value:3},'journal-test');
+  await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
+  await page.locator('.cj-reader .cj-alert').waitFor();
+  assert.match(await page.locator('.cj-reader .cj-alert').innerText(),/本次尚未生成轨迹/);
+  assert.doesNotMatch(await page.locator('.cj-reader .cj-alert').innerText(),/已有轨迹仍可阅读/);
+  await page.getByText('诊断信息',{exact:true}).click();
+  assert.match(await page.locator('.cj-reader .cj-alert pre').innerText(),/SUMMARY_LENGTH/);
+  await page.screenshot({path:join(output,'dsh-journal-format-failure.png'),fullPage:true});
   await page.locator('.cj-workspaces button[title$="harmony"]').click();await page.locator('.cj-notice').waitFor();
   await runtime.api('fail',{value:true},'journal-test');await page.getByRole('button',{name:'重新解析',exact:true}).click();
   await page.locator('.cj-reader .cj-alert').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);

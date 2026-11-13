@@ -32,9 +32,9 @@ test('route comes from last DSH request and source changes invalidate evidence',
 function harness(){
   const logs=new Map([['a',{session:{id:'a',createdAt:1,cwd:'/one'},events:events(user('目标'),ai('完成'))}],['b',{session:{id:'b',createdAt:2,cwd:'/two'},events:events(user('另一个'))}],['child',{session:{id:'child',origin:'subagent',createdAt:3},events:[]}]]);
   const tables={reports:new Map(),versions:new Map()};const domain={table:n=>({get:k=>tables[n].get(k),put:async(k,v)=>tables[n].set(k,structuredClone(v))}),close:async()=>{}};
-  let fail=false,calls=0;
-  const ctx={sessionQuery:{listSessions:async()=>[...logs.values()].map(l=>({header:l.session})),readSession:async id=>{if(!logs.has(id))throw Error('notfound');return structuredClone(logs.get(id));}},workspaceRegistry:{list:()=>[{id:'w1',title:'same',path:'/one',sessionIds:['a','child']},{id:'w2',title:'same',path:'/two',sessionIds:['b']}],archivedSessionIds:['b']},llm:{prepareCall:async config=>({config,async *stream(options){calls++;assert.equal(options.purpose,'collab-journal');assert.equal(options.tools,undefined);if(fail)throw Error('fixture failure');yield {type:'text-delta',index:0,text:await generate(JSON.parse(options.messages[0].content[0].text))};yield {type:'finish',reason:{kind:'stop'}};}})}};
-  return {journal:new Journal(ctx,domain),logs,tables,setFail:()=>{fail=true;},calls:()=>calls};
+  let fail=false,calls=0,response=generate;
+  const ctx={sessionQuery:{listSessions:async()=>[...logs.values()].map(l=>({header:l.session})),readSession:async id=>{if(!logs.has(id))throw Error('notfound');return structuredClone(logs.get(id));}},workspaceRegistry:{list:()=>[{id:'w1',title:'same',path:'/one',sessionIds:['a','child']},{id:'w2',title:'same',path:'/two',sessionIds:['b']}],archivedSessionIds:['b']},llm:{prepareCall:async config=>({config,async *stream(options){calls++;assert.equal(options.purpose,'collab-journal');assert.equal(options.tools,undefined);if(fail)throw Error('fixture failure');yield {type:'text-delta',index:0,text:await response(JSON.parse(options.messages[0].content[0].text))};yield {type:'finish',reason:{kind:'stop'}};}})}};
+  return {journal:new Journal(ctx,domain),logs,tables,setFail:()=>{fail=true;},setResponse:f=>{response=f;},calls:()=>calls};
 }
 test('catalogue respects native workspace IDs, archive and subagent classification',async()=>{
   const h=harness(),result=await h.journal.catalog();assert.equal(result.workspaces.length,2);assert.deepEqual(result.workspaces[0].sessions.map(s=>s.id),['a']);assert.equal(result.workspaces[1].sessions[0].archived,true);assert.equal(h.calls(),0);
@@ -48,4 +48,19 @@ test('manual parsing, deduplication, failed rerun and immutable original evidenc
 });
 test('no model route is an explicit failure, not a fake summary',async()=>{
   const h=harness();await h.journal.start('b');await h.journal.active.pending;assert.equal((await h.journal.detail('b')).run.status,'failed');assert.equal(h.tables.reports.size,0);
+});
+test('exhausted format repairs keep the stage, diagnostics and previous report',async t=>{
+  const logs=[];t.mock.method(console,'warn',(...args)=>logs.push(args.join(' ')));
+  const h=harness();await h.journal.start('a');await h.journal.active.pending;
+  const original=h.tables.reports.get('a');
+  h.setResponse(async({items})=>JSON.stringify({items:items.map(i=>({id:i.id,summary:'私'.repeat(181),details:[]}))}));
+  await h.journal.start('a');await h.journal.active.pending;
+  const {run,report}=await h.journal.detail('a');
+  assert.equal(run.status,'failed');assert.match(run.stage,/整理片段.*格式纠正 2\/2/);
+  assert.equal(run.diagnostic.attempts,3);assert.equal(run.diagnostic.modelCalls,3);
+  assert.deepEqual(run.diagnostic.route,{provider:'fixture',model:'test'});
+  assert.equal(run.diagnostic.issues[0].code,'SUMMARY_LENGTH');
+  assert.match(run.error,/items\[0\].summary.*181/);
+  assert.equal(report.snapshotId,original.snapshotId);assert.deepEqual(h.tables.reports.get('a'),original);
+  assert.equal(logs.length,1);assert.doesNotMatch(logs[0],/私/);assert.match(logs[0],/OutputValidationError/);
 });

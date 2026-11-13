@@ -85,7 +85,11 @@ export function JournalPage(){
           {!id?<div className="cj-empty"><h2>选一段值得回看的对话</h2><p>解析只会在你点击后开始。</p></div>:<>
             <header className="cj-reader-head"><div><div className="cj-eyebrow">协作轨迹</div><h2>{session?.title||id}</h2><p>{detail?.route?`${detail.route.provider} / ${detail.route.model}`:'复用此会话的 DSH 模型'}{detail?.report?` · 生成于 ${formatTime(detail.report.generatedAt)}`:''}</p></div><button className="cj-primary" disabled={running||!detail||!detail.humanCount||!detail.route} onClick={parse}>{running?'正在解析…':detail?.report?'重新解析':'解析轨迹'}</button></header>
             {running&&<div className="cj-progress" role="status"><span className="cj-pulse"/>{detail?.run?.stage||'准备解析'}<button className="cj-link" onClick={cancel}>停止</button></div>}
-            {(detail?.run?.status==='failed'||detail?.run?.status==='cancelled')&&<p className="cj-alert" role="alert">{detail.run.error}；已有轨迹仍可阅读。</p>}
+            {(detail?.run?.status==='failed'||detail?.run?.status==='cancelled')&&<div className="cj-alert" role="alert"><div>
+              <p>{detail.run.error}。{detail.report?'已有轨迹仍可阅读。':'本次尚未生成轨迹，可重试。'}</p>
+              <p>停止位置：{detail.run.stage}</p>
+              {detail.run.diagnostic&&<details><summary>诊断信息</summary><pre>{JSON.stringify(detail.run.diagnostic,null,2)}</pre></details>}
+            </div></div>}
             {detail?.report?.stale&&<p className="cj-notice">这段会话有新内容。当前展示上次解析的轨迹和原文快照，可点击重新解析。</p>}
             {detail?.report?<><div className="cj-reading-key"><span><i/>人提出、纠正、确认</span><span><i/>AI 回复、调查、执行</span><small>{detail.report.nodes.length} 个节点</small></div><Timeline key={id} id={id} report={detail.report}/><p className="cj-footnote">摘要由 AI 整理，请结合原文核对。图片、音频等附件本版仅保留引用。</p></>:<div className="cj-empty"><div className="cj-sequence"><b>人</b><span>→</span><b>AI</b><span>→</span><b>人</b><span>→</span><b>AI</b></div><h2>{detail?'把长对话，读成清楚的过程':'正在读取会话…'}</h2><p>{detail&&!detail.route?'请先在 DSH 选择模型并完成一次对话。':'每次人的表达独立保留，连续的 AI 行动合并展示。'}<br/>点击「解析轨迹」后，使用 DSH 模型整理这段会话。</p></div>}
           </>}

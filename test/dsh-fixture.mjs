@@ -8,14 +8,20 @@ const { LlmAdapter,createUserMessage,createAssistantMessage,createToolResultMess
 export const name='journal-integration-fixture';
 export const inject=['llm','sessions','sessionPersistence','sessionQuery','workspaceRegistry','connection'];
 export async function apply(ctx){
-  let fail=false,calls=0,seenTail=false;
+  let fail=false,calls=0,seenTail=false,malformed=0,repairs=0;
   class Adapter extends LlmAdapter {
     async *stream(options){
       if(options.purpose!=='collab-journal')throw Error('unexpected purpose');
       if(options.tools?.length)throw Error('journal must not request tools');
       calls++;if(fail)throw Error('fixture model failure');
       const text=options.messages[0].content[0].text;seenTail ||= text.includes('TAIL_EVIDENCE');
-      const {items}=JSON.parse(text);
+      const {items,correction}=JSON.parse(text);
+      if(correction)repairs++;
+      if(malformed>0){
+        malformed--;
+        yield {type:'text-delta',index:0,text:JSON.stringify({items:items.map(i=>({id:i.id,summary:'长'.repeat(181),details:[]}))})};
+        yield {type:'finish',reason:{kind:'stop'}};return;
+      }
       const summaries={n1:'提出目标：收敛流量购买的 H5 跳转方式。',n2:'查阅 Android 跳转实现与工具日志，找到三个入口，随后请求确认统一范围。尚未修改代码。',n3:'纠正范围：安卓和鸿蒙都要统一，要求先比较缺失的 API。',n4:'完成两端 API 对比，指出鸿蒙缺少返回结果的桥接。实现与验证尚未开始。',n5:'继续追问测试结果。'};
       yield {type:'text-delta',index:0,text:JSON.stringify({items:items.map(i=>({id:i.id,summary:summaries[i.nodeId||i.id.split('.')[0]]||'整理会话材料。',details:['测试模型生成，用于验证 DSH 插件链路。']}))})};
       yield {type:'finish',reason:{kind:'stop'}};
@@ -52,11 +58,12 @@ export async function apply(ctx){
     try {
     const body=await request.json();
     if(body.action==='fail')fail=body.value;
+    if(body.action==='malformed')malformed=body.value;
     if(body.action==='append'){
       const event=primary.append('user/message',createUserMessage({content:[{type:'text',text:'今天继续：检查测试结果。'}],source:{kind:'user'}}),{surfaceOp:'append'});
       const writer=await ctx.sessionPersistence.open(primary.id,'write');try{await writer.append([event]);}finally{await writer.close();}
     }
-    return Response.json({ready:true,calls,seenTail,live:!!ctx.sessions.get('journal-test-a')});
+    return Response.json({ready:true,calls,seenTail,repairs,live:!!ctx.sessions.get('journal-test-a')});
     }catch(error){return Response.json({ok:false,error:error.stack},{status:500});}
   }}));
 }

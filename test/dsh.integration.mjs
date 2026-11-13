@@ -7,10 +7,18 @@ try{
   assert.equal(groups.length,2);assert.equal(groups[0].title,groups[1].title);assert.notEqual(groups[0].id,groups[1].id);
   assert.deepEqual(groups.flatMap(w=>w.sessions.map(s=>s.id)).sort(),['journal-test-a','journal-test-b']);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
+  await runtime.api('malformed',{value:1},'journal-test');
   await runtime.api('parse',{id:'journal-test-a'});let detail=await runtime.settled('journal-test-a');
   assert.equal(detail.run.status,'completed',JSON.stringify(detail.run));assert.equal(detail.report.nodes.filter(n=>n.role==='user').length,2);assert.equal(detail.report.nodes.length,4);
   assert.equal((await runtime.api('status',{},'journal-test')).seenTail,true);
+  assert.equal((await runtime.api('status',{},'journal-test')).repairs,1);
   const snapshotId=detail.report.snapshotId;
+  await runtime.api('malformed',{value:3},'journal-test');
+  await runtime.api('parse',{id:'journal-test-a'});detail=await runtime.settled('journal-test-a');
+  assert.equal(detail.run.status,'failed');assert.equal(detail.run.diagnostic.code,'MODEL_OUTPUT_INVALID');
+  assert.equal(detail.run.diagnostic.attempts,3);assert.equal(detail.run.diagnostic.modelCalls,3);
+  assert.match(detail.run.stage,/整理片段/);assert.equal(detail.run.diagnostic.issues[0].code,'SUMMARY_LENGTH');
+  assert.equal(detail.report.snapshotId,snapshotId);
   const context=await runtime.api('context',{id:'journal-test-a',snapshotId,nodeId:'n2'});assert.ok(context.entries.some(e=>e.text.includes('TAIL_EVIDENCE')));assert.ok(context.entries.some(e=>e.role==='context'));
   await runtime.api('append',{},'journal-test');assert.equal((await runtime.api('detail',{id:'journal-test-a'})).report.stale,true);
   await runtime.api('fail',{value:true},'journal-test');await runtime.api('parse',{id:'journal-test-a'});detail=await runtime.settled('journal-test-a');

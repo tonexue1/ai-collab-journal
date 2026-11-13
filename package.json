@@ -1,6 +1,6 @@
 {
   "name": "dsh-collab-journal",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH 原生协作观察插件：按 workspace 浏览会话，手动简化人机轨迹，回查原文。",
   "type": "module",
   "main": "lib/index.js",
