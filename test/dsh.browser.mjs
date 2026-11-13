@@ -26,8 +26,22 @@ try{
   await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
   await runtime.api('malformed',{value:1},'journal-test');
+  // Hold the model so navigation must occur before completion. Returning to
+  // the session must synchronize the catalogue without clicking Refresh.
+  await runtime.api('hold',{value:true},'journal-test');
   await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
+  await page.locator('.cj-progress').waitFor();
+  assert.equal((await runtime.api('detail',{id:'journal-test-a'})).run.status,'running');
+  await page.locator('.cj-workspaces button[title$="android"]').click();
+  await page.getByRole('heading',{name:'检查 Android Push API',exact:true}).waitFor();
+  assert.equal((await runtime.api('detail',{id:'journal-test-a'})).run.status,'running');
+  await runtime.api('hold',{value:false},'journal-test');
+  assert.equal((await runtime.settled('journal-test-a')).run.status,'completed');
+  await page.locator('.cj-workspaces button[title$="harmony"]').click();
   await page.locator('.cj-timeline').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
+  await page.locator('.cj-session[aria-pressed="true"] .cj-status-ready').waitFor();
+  assert.equal(await page.locator('.cj-session[aria-pressed="true"] .cj-status').innerText(),'已解析');
+  assert.equal(await page.locator('.cj-overview > span').filter({hasText:'已解析'}).innerText(),'1 已解析');
   await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
   await page.screenshot({path:join(output,'dsh-journal-desktop.png'),fullPage:true});
   await page.emulateMedia({colorScheme:'dark'});

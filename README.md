@@ -21,7 +21,7 @@
 
 ## 安装
 
-要求 Node.js **24.9+**、DSH **0.2.1-rc.2 或 0.2.2-rc.1**，以及 PATH 中的 pnpm（缺少时执行 `npm install --global pnpm@11.25.0`）。这两个内核版本均纳入原生安装、集成与浏览器测试，不需要版本豁免；其他版本需要重新验证。Desktop 外壳版本与内置 DSH 内核版本分别核对，例如本机报告的 Desktop 2.0.18 内置 0.2.1-rc.2。
+要求 Node.js **24.9+**、DSH **0.2.1-rc.2、0.2.1-rc.5 或 0.2.2-rc.1**，以及 PATH 中的 pnpm（缺少时执行 `npm install --global pnpm@11.25.0`）。这三个内核版本均纳入原生安装、集成与浏览器测试矩阵，不需要版本豁免；其他版本需要重新验证。Desktop 外壳版本与内置 DSH 内核版本分别核对，不能将内置浏览器的 Electron 版本当作 DSH Desktop 版本。
 
 在本仓库目录执行（PowerShell / bash 均可）：
 
@@ -29,7 +29,7 @@
 git pull
 npm ci
 npm pack
-dsh plugin --profile web add ./dsh-collab-journal-0.2.2.tgz
+dsh plugin --profile web add ./dsh-collab-journal-0.2.3.tgz
 dsh web
 ```
 
@@ -37,7 +37,11 @@ dsh web
 
 `web` 指 DSH 的 Web profile。你运行自定义 profile 时，把安装命令的 `web` 替换为对应名称。桌面版请在该 DSH 实例的 **插件管理 → 添加插件** 中填写本地构建后仓库的绝对路径，安装到桌面实例；CLI 的 web profile 与桌面 profile 不共享安装。桌面壳本身尚未做自动化验收。
 
-Desktop 更新后，完全退出应用（包括托盘）再重新打开。在「协作观察 → 版本信息」核对界面与后台版本都是 0.2.2，且构建标识一致。该标识由本次构建的源码内容生成，修改代码后重新构建会改变；仅查看安装器的版本号、禁用再启用插件，不足以证明宿主已加载新代码。这里无需重启操作系统。升级保留原 storage domain 与已生成的轨迹。
+Desktop 更新后，完全退出应用（包括托盘）再重新打开。在「协作观察 → 版本信息」核对界面与后台版本都是 0.2.3，且构建标识一致。该标识由本次构建的源码内容生成，修改代码后重新构建会改变；仅查看安装器的版本号、禁用再启用插件，不足以证明宿主已加载新代码。这里无需重启操作系统。升级保留原 storage domain 与已生成的轨迹。
+
+同版本反复构建时，不要覆盖同一路径的 tarball 后直接重装：本机 pnpm 曾报告“Already up to date”，重启后仍加载旧包。给每次构建使用不同的安装包路径（例如将 `.tgz` 文件名加上构建标识），再执行 `dsh plugin --profile web add <新路径>`，最后核对前后台标识。不要通过清空 profile 或 storage 来解决缓存。
+
+若侧栏仍显示“AI 默认只取首尾回应”，先检查实际 profile 的 `cordis.patch.yml` 是否直接加载旧 `collaboration-observer` 文件路径。这是早期原型，与本包不同；应先备份配置，仅移除旧原型的加载项，再安装本包并重启。保留旧原型文件与数据，不要按安装器版本判断实际加载版本。
 
 仓库尚未发布 npm 包，请使用上面的本地打包安装，不能直接运行 `dsh plugin add dsh-collab-journal`。升级后重新构建、打包、安装并重启即可。
 
@@ -79,7 +83,7 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-集成测试实际启动已安装的 DSH，在隔离的 `DSH_HOME` 中通过 `dsh plugin --profile web add` 安装本项目 tarball，使用 DSH 原生 session/workspace/persistence/LLM/storage 服务。覆盖跨日旧会话、合并边界、长工具日志尾部、快照、失败重试、鉴权、实际构建标识和重启后的持久会话读取。浏览器测试在真实 DSH 页面中点击原生侧栏入口、解析、展开原文、切换 workspace、搜索并检查窄布局，以及 12 条未归组会话中 7 条归档的过滤提示、滚轮和键盘访问。CI 在 Windows/Linux 分别运行两个 DSH 内核版本的集成测试，并对两个版本运行浏览器测试。
+集成测试实际启动已安装的 DSH，在隔离的 `DSH_HOME` 中通过 `dsh plugin --profile web add` 安装本项目 tarball，使用 DSH 原生 session/workspace/persistence/LLM/storage 服务。覆盖跨日旧会话、合并边界、长工具日志尾部、快照、失败重试、鉴权、实际构建标识和重启后的持久会话读取。浏览器测试在真实 DSH 页面中点击原生侧栏入口、解析、展开原文、切换 workspace、搜索并检查窄布局，以及 12 条未归组会话中 7 条归档的过滤提示、滚轮和键盘访问。CI 在 Windows/Linux 分别运行三个 DSH 内核版本的集成测试，并在 Linux 对三个版本运行浏览器测试。
 
 测试模型是通过 DSH LLM 服务注册的确定性适配器，用于验证协议和链路，不代表真实模型的摘要质量。真实模型质量需要结合你的会话核对。
 

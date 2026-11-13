@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import css from './style.css';
 import { pluginBuild } from './build-info.mjs';
+import { syncCatalogDetail } from './catalog-sync.mjs';
 
 export async function request(action,params={},signal){
   const response=await fetch('api/dsh-collab-journal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...params}),signal});
@@ -44,6 +45,7 @@ export function JournalPage(){
     catch(e){if(version===catalogVersion.current)setError(e.message);}finally{if(version===catalogVersion.current)setLoading(false);}
   }
   useEffect(()=>{void refresh();return()=>{catalogVersion.current++;selection.current++;};},[]);
+  function receiveDetail(data){setDetail(data);setCatalog(current=>syncCatalogDetail(current,data));}
   const group=catalog?.workspaces.find(w=>w.id===workspace);
   const sessions=(group?.sessions||[]).filter(s=>(archived||!s.archived)&&`${s.title} ${s.directory}`.toLowerCase().includes(query.toLowerCase()));
   const archivedCount=(group?.sessions||[]).filter(s=>s.archived).length;
@@ -54,7 +56,7 @@ export function JournalPage(){
     setDetail(previous=>previous?.id===id?previous:null);setStarting(false);setError('');
     if(!id)return()=>controller.abort();
     async function pull(){
-      try {const data=await request('detail',{id},controller.signal);if(version!==selection.current)return;setDetail(data);}
+      try {const data=await request('detail',{id},controller.signal);if(version!==selection.current)return;receiveDetail(data);}
       catch(e){if(!controller.signal.aborted&&version===selection.current)setError(e.message);}
     }
     void pull();return()=>controller.abort();
@@ -63,7 +65,7 @@ export function JournalPage(){
   useEffect(()=>{
     if(detail?.run?.status!=='running')return;
     const version=selection.current,controller=new AbortController();
-    const timer=setTimeout(()=>{request('detail',{id},controller.signal).then(data=>{if(version===selection.current){setDetail(data);if(data.run?.status!=='running')void refresh();}}).catch(e=>{if(!controller.signal.aborted)setError(e.message);});},1300);
+    const timer=setTimeout(()=>{request('detail',{id},controller.signal).then(data=>{if(version===selection.current)receiveDetail(data);}).catch(e=>{if(!controller.signal.aborted)setError(e.message);});},1300);
     return()=>{clearTimeout(timer);controller.abort();};
   },[id,detail]);
   async function parse(){

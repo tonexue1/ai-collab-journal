@@ -9,7 +9,11 @@ try{
   assert.deepEqual(groups.flatMap(w=>w.sessions.map(s=>s.id)).sort(),['journal-test-a','journal-test-b']);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
   await runtime.api('malformed',{value:1},'journal-test');
-  await runtime.api('parse',{id:'journal-test-a'});let detail=await runtime.settled('journal-test-a');
+  await runtime.api('hold',{value:true},'journal-test');
+  await runtime.api('parse',{id:'journal-test-a'});
+  assert.equal((await runtime.api('detail',{id:'journal-test-a'})).run.status,'running');
+  await runtime.api('hold',{value:false},'journal-test');
+  let detail=await runtime.settled('journal-test-a');
   assert.equal(detail.run.status,'completed',JSON.stringify(detail.run));assert.equal(detail.report.nodes.filter(n=>n.role==='user').length,2);assert.equal(detail.report.nodes.length,4);
   assert.equal((await runtime.api('status',{},'journal-test')).seenTail,true);
   assert.equal((await runtime.api('status',{},'journal-test')).repairs,1);

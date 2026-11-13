@@ -9,11 +9,13 @@ export const name='journal-integration-fixture';
 export const inject=['llm','sessions','sessionPersistence','sessionQuery','workspaceRegistry','connection'];
 export async function apply(ctx){
   let fail=false,calls=0,seenTail=false,malformed=0,repairs=0;
+  let held=null,release;
   class Adapter extends LlmAdapter {
     async *stream(options){
       if(options.purpose!=='collab-journal')throw Error('unexpected purpose');
       if(options.tools?.length)throw Error('journal must not request tools');
-      calls++;if(fail)throw Error('fixture model failure');
+      calls++;if(held)await held;
+      if(fail)throw Error('fixture model failure');
       const text=options.messages[0].content[0].text;seenTail ||= text.includes('TAIL_EVIDENCE');
       const {items,correction}=JSON.parse(text);
       if(correction)repairs++;
@@ -57,6 +59,10 @@ export async function apply(ctx){
   ctx.effect(()=>ctx.connection.fetch.register({path:'/api/journal-test',methods:['POST'],requestBody:'buffered',async fetch(request){
     try {
     const body=await request.json();
+    if(body.action==='hold'){
+      if(body.value&&!held)held=new Promise(resolve=>{release=resolve;});
+      else if(!body.value){release?.();held=null;release=null;}
+    }
     if(body.action==='fail')fail=body.value;
     if(body.action==='malformed')malformed=body.value;
     if(body.action==='seed-list'){
