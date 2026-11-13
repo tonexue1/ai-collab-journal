@@ -21,6 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        dsh: ['0.2.1-rc.2', '0.2.2-rc.1']
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -31,9 +32,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm install --global pnpm@11.25.0
-      - run: npm install --prefix .dsh-test/runtime --no-save @deepseek-ai/dsh@0.2.2-rc.1
+      - run: npm install --prefix .dsh-test/runtime --no-save @deepseek-ai/dsh@${{ matrix.dsh }}
       - run: npm run test:integration
   browser:
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh: ['0.2.1-rc.2', '0.2.2-rc.1']
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -44,14 +49,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm install --global pnpm@11.25.0
-      - run: npm install --prefix .dsh-test/runtime --no-save @deepseek-ai/dsh@0.2.2-rc.1
+      - run: npm install --prefix .dsh-test/runtime --no-save @deepseek-ai/dsh@${{ matrix.dsh }}
       - run: npm install --no-save --package-lock=false playwright@1.62.1
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dsh-browser-screenshots
+          name: dsh-browser-screenshots-${{ matrix.dsh }}
           path: test-results/browser
           if-no-files-found: ignore
   package:

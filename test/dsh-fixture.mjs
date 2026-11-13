@@ -59,6 +59,15 @@ export async function apply(ctx){
     const body=await request.json();
     if(body.action==='fail')fail=body.value;
     if(body.action==='malformed')malformed=body.value;
+    if(body.action==='seed-list'){
+      for(let i=0;i<12;i++){
+        const id=`journal-list-${String(i+1).padStart(2,'0')}`;
+        const s=ctx.sessions.create(id,{meta:{createdAt:Date.now()-i*1000}});
+        s.append('user/message',createUserMessage({content:[{type:'text',text:`列表测试 ${i+1}`}],source:{kind:'user'}}),{surfaceOp:'append'});
+        await persist(s);
+        if(i>=5)await ctx.workspaceRegistry.archiveSession(id);
+      }
+    }
     if(body.action==='append'){
       const event=primary.append('user/message',createUserMessage({content:[{type:'text',text:'今天继续：检查测试结果。'}],source:{kind:'user'}}),{surfaceOp:'append'});
       const writer=await ctx.sessionPersistence.open(primary.id,'write');try{await writer.append([event]);}finally{await writer.close();}

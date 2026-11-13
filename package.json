@@ -1,6 +1,6 @@
 {
   "name": "dsh-collab-journal",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "DSH 原生协作观察插件：按 workspace 浏览会话，手动简化人机轨迹，回查原文。",
   "type": "module",
   "main": "lib/index.js",
@@ -21,7 +21,7 @@
   },
   "engines": {
     "node": ">=24.9.0",
-    "dsh": ">=0.2.2-rc.1 <0.3.0"
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "dsh": {
     "bundle": {
@@ -44,8 +44,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.1.0",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2 || 0.2.2-rc.1",
+    "@deepseek-ai/dsh-storage-domain": "0.2.1-rc.2 || 0.2.2-rc.1",
     "react": "^18.3.1"
   },
   "peerDependenciesMeta": {

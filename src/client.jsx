@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import css from './style.css';
+import { pluginBuild } from './build-info.mjs';
 
 export async function request(action,params={},signal){
   const response=await fetch('api/dsh-collab-journal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...params}),signal});
@@ -45,6 +46,8 @@ export function JournalPage(){
   useEffect(()=>{void refresh();return()=>{catalogVersion.current++;selection.current++;};},[]);
   const group=catalog?.workspaces.find(w=>w.id===workspace);
   const sessions=(group?.sessions||[]).filter(s=>(archived||!s.archived)&&`${s.title} ${s.directory}`.toLowerCase().includes(query.toLowerCase()));
+  const archivedCount=(group?.sessions||[]).filter(s=>s.archived).length;
+  const buildMismatch=catalog&&catalog.pluginBuild?.id!==pluginBuild.id;
   useEffect(()=>{setId(current=>sessions.some(s=>s.id===current)?current:sessions[0]?.id||'');},[workspace,query,archived,catalog]);
   useEffect(()=>{
     const version=++selection.current,controller=new AbortController();
@@ -74,12 +77,14 @@ export function JournalPage(){
   return <main className="cj-root" data-testid="journal">
     <div className="cj-page">
       <header className="cj-heading"><div><div className="cj-eyebrow">DSH · COLLABORATION JOURNAL</div><h1>协作观察 <span>看清我们怎样把事情做成</span></h1><p>从 workspace 找到一段对话，展开人和 AI 的来回。</p></div><button onClick={refresh} disabled={loading}>{loading?'读取中…':'刷新会话'}</button></header>
+      <details className="cj-build"><summary>版本信息</summary><p>界面 {pluginBuild.version} / {pluginBuild.id}</p><p>后台 {catalog?.pluginBuild?`${catalog.pluginBuild.version} / ${catalog.pluginBuild.id}`:'未提供构建标识'}</p></details>
+      {buildMismatch&&<p className="cj-notice" role="alert">界面与后台构建不一致。请完全退出 DSH（包括托盘）并重启，再核对版本信息。</p>}
       <div className="cj-overview"><span><b>{catalog?.workspaces.length||0}</b> workspace</span><span><b>{all.length}</b> 段会话</span><span><b>{parsed}</b> 已解析</span><em>手动解析 · 完整会话 · 可回查原文</em></div>
       <div className="cj-workspaces" aria-label="选择 workspace">{catalog?.workspaces.map(w=><button key={w.id} onClick={()=>{setWorkspace(w.id);setQuery('');}} aria-pressed={workspace===w.id} title={w.path}><span className="cj-folder" aria-hidden="true">▱</span>{w.title}<small>{w.sessions.length}</small></button>)}</div>
       {error&&<div className="cj-alert" role="alert">{error}<button onClick={()=>{void refresh();setId('');}}>重试</button></div>}
       {catalog&&!catalog.workspaces.length?<section className="cj-empty"><Icon size={32}/><h2>从第一段 DSH 对话开始</h2><p>在 DSH 创建 workspace 并聊一次，再回来刷新。</p></section>:<div className="cj-layout">
-        <aside className="cj-list"><div className="cj-list-head"><h2>{group?.title||'会话'}</h2><p title={group?.path}>{group?.path||'DSH 会话目录'}</p><input aria-label="搜索会话" placeholder="搜索会话…" value={query} onChange={e=>setQuery(e.target.value)}/><label><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>包含已归档会话</label></div>
-          <div className="cj-session-list">{sessions.map(s=><button className="cj-session" key={s.id} onClick={()=>setId(s.id)} aria-pressed={id===s.id}><span className="cj-session-title">{s.title}</span><span className="cj-session-meta"><time>{formatTime(s.lastActivityAt)}</time><span>{s.humanCount} 次表达</span></span><span className={`cj-status cj-status-${s.status}`}>{s.archived?'已归档 · ':''}{statusText[s.status]}</span>{s.error&&<small>{s.error}</small>}</button>)}{!sessions.length&&<p className="cj-list-empty">{loading?'正在读取 DSH 会话…':'没有匹配的会话'}</p>}</div>
+        <aside className="cj-list"><div className="cj-list-head"><h2>{group?.title||'会话'}</h2><p title={group?.path}>{group?.path||'DSH 会话目录'}</p><input aria-label="搜索会话" placeholder="搜索会话…" value={query} onChange={e=>setQuery(e.target.value)}/><label><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>包含已归档会话{archivedCount?`（${archivedCount}）`:''}</label><p className="cj-list-count">显示 {sessions.length} / {group?.sessions.length||0} 条{!archived&&archivedCount?` · 已隐藏 ${archivedCount} 条归档`:''}</p></div>
+          <div className="cj-session-list" role="region" aria-label="会话列表" tabIndex={0}>{sessions.map(s=><button className="cj-session" key={s.id} onClick={()=>setId(s.id)} aria-pressed={id===s.id}><span className="cj-session-title">{s.title}</span><span className="cj-session-meta"><time>{formatTime(s.lastActivityAt)}</time><span>{s.humanCount} 次表达</span></span><span className={`cj-status cj-status-${s.status}`}>{s.archived?'已归档 · ':''}{statusText[s.status]}</span>{s.error&&<small>{s.error}</small>}</button>)}{!sessions.length&&<p className="cj-list-empty">{loading?'正在读取 DSH 会话…':'没有匹配的会话'}</p>}</div>
         </aside>
         <section className="cj-reader" aria-label="会话轨迹">
           {!id?<div className="cj-empty"><h2>选一段值得回看的对话</h2><p>解析只会在你点击后开始。</p></div>:<>

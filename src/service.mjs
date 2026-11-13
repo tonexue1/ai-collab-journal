@@ -1,6 +1,7 @@
 import { analyzeTrajectory, fingerprint, routeFrom, sourceEntries, contentText } from './trajectory.mjs';
 import { modelGenerator } from './model.mjs';
 import { OutputValidationError } from './output.mjs';
+import { pluginBuild } from './build-info.mjs';
 
 export class JournalError extends Error {constructor(message,status=400){super(message);this.status=status;}}
 export class Journal {
@@ -33,7 +34,7 @@ export class Journal {
     }));
     if(ungrouped.sessions.length)workspaces.push(ungrouped);
     for(const w of workspaces){delete w.sessionIds;w.sessions.sort((a,b)=>b.lastActivityAt-a.lastActivityAt||a.id.localeCompare(b.id));}
-    return {workspaces,activeRun:this.active?this.runs.get(this.active.id):null};
+    return {workspaces,activeRun:this.active?this.runs.get(this.active.id):null,pluginBuild};
   }
   async detail(id){
     const log=await this.source(id),stored=this.domain.table('reports').get(id);
@@ -68,7 +69,7 @@ export class Journal {
     } catch(error){
       run.status=abort.signal.aborted?'cancelled':'failed';
       run.error=error.name==='TimeoutError'?'解析超时':error.message;
-      run.diagnostic={code:error.code||error.name||'PARSE_FAILED',stage:run.stage,route:run.route,modelCalls:run.modelCalls,elapsedMs:Date.now()-run.startedAt};
+      run.diagnostic={code:error.code||error.name||'PARSE_FAILED',stage:run.stage,route:run.route,modelCalls:run.modelCalls,elapsedMs:Date.now()-run.startedAt,pluginBuild};
       if(error instanceof OutputValidationError){
         Object.assign(run.diagnostic,{attempts:error.attempts,issues:error.issues});
         // This error's message and stack contain only our structural diagnostics.

@@ -14,6 +14,8 @@ export async function command(file,args,env){
 }
 export async function createRuntime(){
   const cli=resolve(process.env.DSH_CLI||'.dsh-test/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js');await access(cli);
+  const runtimeVersion=JSON.parse(await readFile(resolve(cli,'../../package.json'),'utf8')).version;
+  const pluginVersion=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version;
   const home=await mkdtemp(join(tmpdir(),'dsh-journal-'));
   const env={...process.env,DSH_HOME:home,DSH_TEST_ANCHOR:cli};
   const npm=process.platform==='win32'?'npm.cmd':'npm';
@@ -47,5 +49,5 @@ export async function createRuntime(){
     let value;try{value=await res.json();}catch{throw Error(`HTTP ${res.status}`);}if(!res.ok||value.ok===false)throw Error(value.error||JSON.stringify(value));return endpoint==='journal-test'?value:value.value;
   }
   async function settled(id){for(let i=0;i<400;i++){const d=await api('detail',{id});if(d.run?.status!=='running')return d;await delay(100);}throw Error('parse timeout');}
-  return {home,start,stop,api,settled,get base(){return base;},get cookie(){return cookie;},get log(){return log.replace(/token=\S+/g,'token=[redacted]');}};
+  return {home,runtimeVersion,pluginVersion,start,stop,api,settled,get base(){return base;},get cookie(){return cookie;},get log(){return log.replace(/token=\S+/g,'token=[redacted]');}};
 }

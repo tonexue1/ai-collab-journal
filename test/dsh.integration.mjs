@@ -4,6 +4,7 @@ const runtime=await createRuntime();
 try{
   await runtime.start();
   const catalogue=await runtime.api('catalog');const groups=catalogue.workspaces.filter(w=>w.sessions.length);
+  assert.equal(catalogue.pluginBuild.version,runtime.pluginVersion);assert.match(catalogue.pluginBuild.id,/^[a-f0-9]{12}$/);
   assert.equal(groups.length,2);assert.equal(groups[0].title,groups[1].title);assert.notEqual(groups[0].id,groups[1].id);
   assert.deepEqual(groups.flatMap(w=>w.sessions.map(s=>s.id)).sort(),['journal-test-a','journal-test-b']);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
@@ -17,6 +18,7 @@ try{
   await runtime.api('parse',{id:'journal-test-a'});detail=await runtime.settled('journal-test-a');
   assert.equal(detail.run.status,'failed');assert.equal(detail.run.diagnostic.code,'MODEL_OUTPUT_INVALID');
   assert.equal(detail.run.diagnostic.attempts,3);assert.equal(detail.run.diagnostic.modelCalls,3);
+  assert.deepEqual(detail.run.diagnostic.pluginBuild,catalogue.pluginBuild);
   assert.match(detail.run.stage,/整理片段/);assert.equal(detail.run.diagnostic.issues[0].code,'SUMMARY_LENGTH');
   assert.equal(detail.report.snapshotId,snapshotId);
   const context=await runtime.api('context',{id:'journal-test-a',snapshotId,nodeId:'n2'});assert.ok(context.entries.some(e=>e.text.includes('TAIL_EVIDENCE')));assert.ok(context.entries.some(e=>e.role==='context'));
@@ -29,5 +31,8 @@ try{
   detail=await runtime.api('detail',{id:'journal-test-a'});assert.equal(detail.report.snapshotId,snapshotId);assert.equal(detail.report.stale,true);
   await runtime.api('parse',{id:'journal-test-a'});detail=await runtime.settled('journal-test-a');assert.equal(detail.run.status,'completed');assert.equal(detail.report.nodes.filter(n=>n.role==='user').length,3);
   assert.equal((await runtime.api('context',{id:'journal-test-a',snapshotId,nodeId:'n1'})).snapshotId,snapshotId);
-  console.log('DSH 0.2.2-rc.1: package install, native workspace/session/LLM/storage, cold restart, stale evidence, failed rerun, immutable context and authentication passed.');
+  await runtime.api('seed-list',{},'journal-test');
+  const ungrouped=(await runtime.api('catalog')).workspaces.find(w=>w.id==='__ungrouped__');
+  assert.equal(ungrouped.sessions.length,12);assert.equal(ungrouped.sessions.filter(s=>s.archived).length,7);
+  console.log(`DSH ${runtime.runtimeVersion}: package install without exemptions, native workspace/session/LLM/storage, cold restart, build identity, format repair, failed rerun, immutable context and authentication passed.`);
 }catch(error){console.error(runtime.log);throw error;}finally{await runtime.stop();}

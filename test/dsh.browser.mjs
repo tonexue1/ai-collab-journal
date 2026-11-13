@@ -17,6 +17,10 @@ try{
   if(needsSetup)await later.click();
   await page.getByRole('button',{name:'协作观察',exact:true}).click({timeout:60000});
   await page.locator('[data-testid=journal]').waitFor();
+  await page.getByText('版本信息',{exact:true}).click();
+  const build=(await runtime.api('catalog')).pluginBuild;
+  assert.match(await page.locator('.cj-build').innerText(),new RegExp(`后台 ${runtime.pluginVersion.replaceAll('.','\\.')} / ${build.id}`));
+  assert.match(await page.locator('.cj-build').innerText(),new RegExp(`界面 ${runtime.pluginVersion.replaceAll('.','\\.')} / ${build.id}`));
   await page.locator('.cj-workspaces button[title$="harmony"]').click();
   await page.getByRole('heading',{name:'统一流量购买 H5 跳转',exact:true}).waitFor();
   await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
@@ -54,6 +58,26 @@ try{
   await page.waitForFunction(()=>{const r=document.querySelector('.cj-root').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1;});
   await page.screenshot({path:join(output,'dsh-journal-narrow.png'),fullPage:true,animations:'disabled'});
   assert.ok(await page.locator('.cj-root').evaluate(e=>e.scrollWidth<=e.clientWidth+1),'plugin must fit native narrow main pane');
+  await page.setViewportSize({width:1500,height:720});
+  await runtime.api('seed-list',{},'journal-test');
+  await page.getByRole('button',{name:'刷新会话',exact:true}).click();
+  await page.locator('.cj-workspaces button').filter({hasText:'未归入 workspace'}).click();
+  await page.getByText('显示 5 / 12 条 · 已隐藏 7 条归档',{exact:true}).waitFor();
+  assert.equal(await page.locator('.cj-session').count(),5);
+  await page.getByRole('checkbox',{name:/包含已归档会话/}).check();
+  await page.getByText('显示 12 / 12 条',{exact:true}).waitFor();
+  assert.equal(await page.locator('.cj-session').count(),12);
+  const list=page.getByRole('region',{name:'会话列表',exact:true});
+  assert.ok(await list.evaluate(e=>e.scrollHeight>e.clientHeight),'12 sessions must overflow the bounded list');
+  await list.hover();await page.mouse.wheel(0,5000);
+  await page.waitForFunction(()=>{const e=document.querySelector('.cj-session-list');return e.scrollTop+e.clientHeight>=e.scrollHeight-2;});
+  const last=page.locator('.cj-session').last(),title=await last.locator('.cj-session-title').innerText();
+  await last.click();await page.getByRole('heading',{name:title,exact:true}).waitFor();
+  await list.focus();await page.keyboard.press('Control+Home');
+  await page.waitForFunction(()=>document.querySelector('.cj-session-list').scrollTop===0);
+  await page.keyboard.press('PageDown');
+  await page.waitForFunction(()=>document.querySelector('.cj-session-list').scrollTop>0);
+  await page.screenshot({path:join(output,'dsh-journal-list-scroll.png'),fullPage:true});
   assert.deepEqual(errors,[],'native page must not throw');
   console.log('Native DSH sidebar, real client loader, manual parse, context, workspace switch, failure state, search, narrow layout passed.');
 }catch(error){if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(join(output,'failure.html'),await page.content());}await writeFile(join(output,'browser-errors.txt'),errors.join('\n'));console.error(runtime.log);throw error;}
