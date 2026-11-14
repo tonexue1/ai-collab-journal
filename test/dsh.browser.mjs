@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir,writeFile } from 'node:fs/promises';
 import { resolve,join } from 'node:path';
 import { createRuntime } from './dsh-runtime.mjs';
+import { checkReplayReader } from './replay-browser.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const output=resolve(process.env.BROWSER_REPORT_DIR||'test-results/browser');await mkdir(output,{recursive:true});
 const runtime=await createRuntime();let browser,page;const errors=[];
@@ -35,6 +36,8 @@ try{
   assert.match(await page.locator('.cj-build').innerText(),new RegExp(`界面 ${runtime.pluginVersion.replaceAll('.','\\.')} / ${build.id}`));
   await page.locator('.cj-workspaces button[title$="harmony"]').click();
   await page.getByRole('heading',{name:'统一流量购买 H5 跳转',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'收藏会话',exact:true}).count(),1,'a conversation can be collected from its existing reader');
+  const replayCalls=await checkReplayReader(page,runtime,output);
   await page.locator('.cj-expression-card').nth(1).waitFor();
   assert.equal(await page.locator('.cj-expression-card').count(),2);
   assert.equal(await page.getByRole('button',{name:'解析轨迹',exact:true}).count(),0,'full parsing is secondary to reading interactions');
@@ -54,7 +57,7 @@ try{
   await page.locator('.cj-expression-card').nth(1).getByRole('button',{name:'查看后续',exact:true}).click();
   await page.locator('.cj-interaction-context .cj-source').first().waitFor();
   assert.match(await page.locator('.cj-interaction-context').innerText(),/FUTURE_RESULT_AFTER_INTERVENTION/);
-  assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
+  assert.equal((await runtime.api('status',{},'journal-test')).calls,replayCalls);
   await page.screenshot({path:join(output,'dsh-journal-expressions.png'),fullPage:true});
   // Only the explicit action may invoke the model. Each interaction result
   // has its own classification and immutable source evidence.
@@ -183,6 +186,6 @@ try{
   await page.getByText('显示 12 / 12 条',{exact:true}).waitFor();
   assert.equal(await page.locator('.cj-session').count(),12,'the original all-session navigation remains reachable');
   assert.deepEqual(errors,[],'native page must not throw');
-  console.log('Native DSH date/session navigation, immediate source reading without model calls, manual interaction analysis and classification, immutable evidence, revision refresh, full timeline, workspace switch, failures, search and narrow layout passed.');
+  console.log('Native DSH favorites across workspace switches, replay inputs, four-call file comparison, human review, failed-run retention, journal navigation, source evidence, manual analysis, full timeline, archive scrolling and narrow layout passed.');
 }catch(error){if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(join(output,'failure.html'),await page.content());}await writeFile(join(output,'browser-errors.txt'),errors.join('\n'));console.error(runtime.log);throw error;}
 finally{await browser?.close();await runtime.stop();}

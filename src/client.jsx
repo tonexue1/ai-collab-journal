@@ -2,6 +2,8 @@ import React,{useCallback,useEffect,useRef,useState} from 'react';
 import css from './style.css';
 import dayCss from './day-presentation.css';
 import readingCss from './reading.css';
+import replayCss from './replay.css';
+import { ReplayReader, useFavorites } from './replay-reader.jsx';
 import { pluginBuild } from './build-info.mjs';
 import { syncCatalogDetail } from './catalog-sync.mjs';
 import { pollReader } from './reader-poll.mjs';
@@ -158,6 +160,7 @@ export function JournalPage(){
   const [summaryRevision, setSummaryRevision] = useState(0);
   const [interactionChanges] = useState(createInteractionChangeObserver);
   const [catalog,setCatalog]=useState(null),[workspace,setWorkspace]=useState(''),[query,setQuery]=useState(''),[archived,setArchived]=useState(false),[navigation,setNavigation]=useState('days'),[selected,setSelected]=useState(null);
+  const favorites=useFavorites(request);
   const [dayState,setDayState]=useState(null),[storedDetail,setDetail]=useState(null),[storedInteractions,setInteractions]=useState(null),[activeRun,setActiveRun]=useState(null);
   const [error,setError]=useState(''),[interactionError,setInteractionError]=useState(''),[loading,setLoading]=useState(true),[starting,setStarting]=useState(false),[revision,setRevision]=useState(0),[view,setView]=useState('expressions');
   const selection=useRef(0),catalogVersion=useRef(0),readerRequest=useRef(0);
@@ -165,7 +168,8 @@ export function JournalPage(){
   const all=catalog?.workspaces.flatMap(w=>w.sessions)||[],group=catalog?.workspaces.find(w=>w.id===workspace),workspaceSessions=workspace?group?.sessions||[]:all;
   const matching=s=>s.title.toLowerCase().includes(query.toLowerCase());
   const visibleDays=filterDayGroups(days?.days||[],selectedDay,query);
-  const catalogSessions=workspaceSessions.filter(s=>(archived||!s.archived)&&matching(s));
+  const scopedSessions=navigation==='favorites'?workspaceSessions.filter(s=>favorites.ids?.has(s.id)):workspaceSessions;
+  const catalogSessions=scopedSessions.filter(s=>(archived||!s.archived)&&matching(s));
   const candidates=navigation==='days'?visibleDays.flatMap(day=>day.sessions.map(session=>({...session,date:day.date}))):catalogSessions.map(session=>({...session,date:null}));
   const session=candidates.find(s=>s.id===selected?.id&&s.date===selected?.date)||candidates[0],id=session?.id||'',date=session?.date??null;
   const displayedSession=useRef(null);
@@ -246,7 +250,7 @@ export function JournalPage(){
   const analyze=(interactionId,force=false)=>act('analyzeInteractions',{...interactionId?{interactionId}:{},force});
   const allAnalyzed=!!interactions?.items.length&&interactions.items.every(item=>item.analysis&&!item.analysis.stale);
   const fullNotice=fullRunning?'完整轨迹正在解析':fullRun?.status==='failed'?'完整轨迹解析未完成':fullRun?.status==='cancelled'?'完整轨迹已暂停':detail?.checkpoint?'完整轨迹有已保存的解析进度':null;
-  const archivedCount=navigation==='days'?days?.archivedByDate?.[selectedDay]||0:workspaceSessions.filter(s=>s.archived).length;
+  const archivedCount=navigation==='days'?days?.archivedByDate?.[selectedDay]||0:scopedSessions.filter(s=>s.archived).length;
   const visibleSessionCount=new Set(candidates.map(s=>s.id)).size;
   function selectDay(value){setSelectedDay(value);setNavigation('days');setSelected(null);}
   return <main className="cj-root" data-testid="journal"><div className="cj-page">
@@ -267,10 +271,10 @@ export function JournalPage(){
     {active&&active.id!==id&&<div className="cj-task-notice" role="status"><span>其他会话正在{active.mode==='interactions'?'整理交互':'解析完整轨迹'}，可继续阅读。</span><button className="cj-link" onClick={cancel}>暂停任务</button></div>}
     <div className="cj-layout"><aside className="cj-list"><div className="cj-list-head">
       <h2>会话</h2><p className="cj-list-zone">{timeZone}</p>
-      <div className="cj-nav-mode" role="group" aria-label="会话分组"><button aria-pressed={navigation==='days'} onClick={()=>setNavigation('days')}>按日期</button><button aria-pressed={navigation==='sessions'} onClick={()=>setNavigation('sessions')}>全部会话</button></div>
+      <div className="cj-nav-mode" role="group" aria-label="会话分组"><button aria-pressed={navigation==='days'} onClick={()=>setNavigation('days')}>按日期</button><button aria-pressed={navigation==='sessions'} onClick={()=>setNavigation('sessions')}>全部会话</button><button aria-pressed={navigation==='favorites'} onClick={()=>setNavigation('favorites')}>我的收藏</button></div>
       <input aria-label="搜索会话" placeholder="搜索会话…" value={query} onChange={e=>setQuery(e.target.value)}/>
       <label><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>包含已归档会话{archivedCount?`（${archivedCount}）`:''}</label>
-      <p className="cj-list-count">{navigation==='days'?`显示 ${visibleDays.length} 天 · ${visibleSessionCount} 段会话`:`显示 ${catalogSessions.length} / ${workspaceSessions.length} 条`}{!archived&&archivedCount?` · 已隐藏 ${archivedCount} 条归档`:''}</p>
+      <p className="cj-list-count">{navigation==='days'?`显示 ${visibleDays.length} 天 · ${visibleSessionCount} 段会话`:navigation==='favorites'&&!favorites.ids?'正在读取收藏…':`显示 ${catalogSessions.length} / ${scopedSessions.length} 条`}{!archived&&archivedCount?` · 已隐藏 ${archivedCount} 条归档`:''}</p>
     </div><div className="cj-session-list" role="region" aria-label="会话列表" tabIndex={0}>
       {navigation==='days'&&visibleDays.map(day=><section className="cj-date-group" key={day.date}>
         <header><h3>{day.date.replaceAll('-','/')}</h3><p>{query?'匹配':'当日'} {day.sessions.length} 段会话 / {day.sessions.reduce((sum,item)=>sum+item.humanCount,0)} 次表达</p></header>
@@ -282,13 +286,14 @@ export function JournalPage(){
           </button>;
         })}
       </section>)}
-      {navigation==='sessions'&&catalogSessions.map(s=><button className="cj-session" key={s.id} onClick={()=>setSelected({id:s.id,date:null})} aria-pressed={id===s.id}>
+      {navigation!=='days'&&catalogSessions.map(s=><button className="cj-session" key={s.id} onClick={()=>setSelected({id:s.id,date:null})} aria-pressed={id===s.id}>
         <span className="cj-session-title">{s.title}</span>
         <span className="cj-session-meta"><time>{formatTime(s.lastActivityAt,timeZone)}</time><span>{s.humanCount} 次表达</span><span className={`cj-status cj-status-${s.status}`}>{s.archived?'已归档 · ':''}{s.status==='error'?'':'完整轨迹 · '}{statusText[s.status]}</span></span>
         {s.error&&<small>{s.error}</small>}
       </button>)}
       {navigation==='days'&&dayState?.key===daysKey&&dayState.error&&<p className="cj-alert" role="alert">{dayState.error}</p>}
-      {!candidates.length&&<p className="cj-list-empty">{navigation==='days'&&dayState?.key!==daysKey?'正在读取交互日期…':query?'没有匹配的会话':navigation==='days'?'此范围没有人的交互':'没有匹配的会话'}</p>}
+      {navigation==='favorites'&&favorites.error&&<p className="cj-alert" role="alert">{favorites.error}<button onClick={favorites.reload}>重读收藏</button></p>}
+      {!candidates.length&&(navigation!=='favorites'||favorites.ids)&&<p className="cj-list-empty">{navigation==='days'&&dayState?.key!==daysKey?'正在读取交互日期…':query?'没有匹配的会话':navigation==='favorites'?'这个范围内还没有收藏的会话':navigation==='days'?'此范围没有人的交互':'没有匹配的会话'}</p>}
     </div>{navigation==='days'&&days?.unknownTimeCount>0&&<p className="cj-list-foot">{days.unknownTimeCount} 次表达缺少日期，可在「全部会话」查看。</p>}{navigation==='days'&&days?.errors.length>0&&<details className="cj-list-errors"><summary>{days.errors.length} 段会话读取失败</summary>{days.errors.map(item=><p key={item.id}>{item.id}：{item.error}</p>)}</details>}</aside>
     <section className="cj-reader" aria-label="会话阅读">{!id?<div className="cj-empty"><Icon size={32}/><h2>{navigation==='days'?'按日期看自己的交互':'选择一段会话'}</h2><p>人的原话可直接阅读，点击整理后再看前因、贡献与分类。</p></div>:<>
       <header className="cj-reader-head">
@@ -302,6 +307,7 @@ export function JournalPage(){
         </div>
         {view==='expressions'?<button className={allAnalyzed?'cj-reanalyze':'cj-primary'} disabled={running||!interactions?.items.length||!detail?.route} onClick={()=>analyze(undefined,allAnalyzed)}>{analysisRunning?'正在整理…':allAnalyzed?(date?'重新整理当天交互':'重新整理这段会话'):(date?'整理当天交互':'整理这段会话')}</button>:<button className={detail?.report&&!detail.checkpoint?'cj-reanalyze':'cj-primary'} disabled={running||!detail?.humanCount||!detail.route} onClick={()=>act('parse')}>{fullRunning?'正在解析…':detail?.checkpoint?'继续解析':detail?.report?'重新解析':'解析轨迹'}</button>}
       </header>
+      <ReplayReader key={id} id={id} request={request} favorites={favorites}/>
       <div className="cj-reading-controls">
         <div className="cj-reader-tabs" role="group" aria-label="阅读方式"><button aria-pressed={view==='expressions'} onClick={()=>setView('expressions')}>我的交互</button><button aria-pressed={view==='timeline'} onClick={()=>setView('timeline')}>完整轨迹</button></div>
         {view==='expressions'&&interactions?.items.length>0&&<CategoryFilters value={interactions} filter={categoryFilter} setFilter={setCategoryFilter}/>}
@@ -329,7 +335,7 @@ export function JournalPage(){
 export const name='dsh-collab-journal';
 export const inject=['slots','connection'];
 export function apply(ctx){
-  ctx.effect(()=>{const style=document.createElement('style');style.dataset.plugin=name;style.textContent=[css,dayCss,readingCss].join('\n');document.head.append(style);return()=>style.remove();});
+  ctx.effect(()=>{const style=document.createElement('style');style.dataset.plugin=name;style.textContent=[css,dayCss,readingCss,replayCss].join('\n');document.head.append(style);return()=>style.remove();});
   ctx.slots.inject('main',()=>ctx.slots.register({name:'main',key:name},()=>React.createElement(JournalPage)));
   ctx.slots.inject('plugins.bundle.config',()=>ctx.slots.register({name:'plugins.bundle.config',key:name},({view})=>view==='page'?<PluginSettings request={request} timeZone={Intl.DateTimeFormat().resolvedOptions().timeZone}/>:null));
   ctx.slots.inject('sidebar.panellist',()=>ctx.slots.register({name:'sidebar.panellist',id:name,order:21,label:()=> '协作观察'},props=>React.createElement(Icon,props)));

@@ -21,4 +21,9 @@ const schedule = z.object({
     status: z.enum(['waiting', 'running', 'completed', 'skipped', 'failed', 'interrupted']),
   }).nullable(),
 });
-export const journalSpec=defineDomain({name:'dsh_collab_journal',version:1,tables:{reports:domainTable(reportSchema),versions:domainTable(reportSchema),checkpoints:domainTable(checkpointSchema),interaction_sources:domainTable(interactionSource),interaction_versions:domainTable(interactionVersion),interaction_latest:domainTable(z.object({resultId:z.string()})),day_summaries:domainTable(daySummary),schedule:domainTable(schedule)}});
+const replayCase=z.object({
+  id:z.string(),favorite:z.boolean(),savedAt:z.number(),
+  humans:z.array(z.object({seq:z.number(),time:z.number().nullable(),text:z.string()})),
+  cues:z.array(z.json()),route:route.nullable(),workspacePath:z.string().nullable(),scene:z.json().nullable(),
+});
+export const journalSpec=defineDomain({name:'dsh_collab_journal',version:1,tables:{reports:domainTable(reportSchema),versions:domainTable(reportSchema),checkpoints:domainTable(checkpointSchema),interaction_sources:domainTable(interactionSource),interaction_versions:domainTable(interactionVersion),interaction_latest:domainTable(z.object({resultId:z.string()})),day_summaries:domainTable(daySummary),replay_cases:domainTable(replayCase),replay_results:domainTable(z.object({run:z.json().nullable(),previous:z.json().nullable()})),schedule:domainTable(schedule)}});

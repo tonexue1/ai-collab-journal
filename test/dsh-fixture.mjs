@@ -26,6 +26,14 @@ export async function apply(ctx){
       const text=options.messages[0].content[0].text;
       const input=JSON.parse(text),{items,anchor,evidence,correction}=input;
       if(correction)repairs++;
+      if(['replay-rule','replay-author','replay-code'].includes(input.kind)){
+        const rule='局部改动前核对已有阅读顺序，按用户要求保留已认可的布局。';
+        const result=input.kind==='replay-rule'?{id:input.options[0].id,reason:'历史上曾再次说明范围。'}:
+          input.kind==='replay-author'?{text:rule}:
+          {files:input.files.map(file=>({path:file.path,text:input.rules.includes(rule)?'export const route = "candidate";\n':'export const route = "baseline";\n'}))};
+        yield {type:'text-delta',index:0,text:JSON.stringify(result)};
+        yield {type:'finish',reason:{kind:'stop'}};return;
+      }
       if(input.kind==='day-summary'){
         // Capture the real plugin request at its external LLM boundary. These
         // synthetic replies check transport/storage only, not semantic quality.
