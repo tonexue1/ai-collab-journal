@@ -24,7 +24,7 @@ function mapStrings(value,transform){
   return value;
 }
 
-export function protectDaySummaryInput(input){
+function protectLocalCredentials(input){
   let redactions=0;
   const copiedTokens=new Set();
   const masked=mapStrings(input,text=>text.replace(localLink,link=>{
@@ -53,7 +53,22 @@ export function protectDaySummaryInput(input){
     const copies=new RegExp([...copiedTokens].sort((a,b)=>b.length-a.length).map(RegExp.escape).join('|'),'gu');
     safe=mapStrings(masked,text=>text.replace(copies,()=>{redactions++;return hiddenLaunchToken;}));
   }
+  return {safe,redactions};
+}
+
+export function protectDaySummaryInput(input){
+  const {safe,redactions} = protectLocalCredentials(input);
   return {...safe,redactions};
+}
+
+// The intervention reader can request any slice of any preceding entry. Inspect
+// the complete potential sources before slicing, including copies identified
+// by a launch URL elsewhere in this session. Only sequence numbers leave here.
+export function firstProtectedInterventionSource(entries) {
+  const {safe, redactions} = protectLocalCredentials(entries);
+  if (!redactions) return Infinity;
+  return entries.reduce((first, entry, index) =>
+    JSON.stringify(entry) !== JSON.stringify(safe[index]) ? Math.min(first, entry.seq) : first, Infinity);
 }
 
 export function dateInterventionEvidence(result,sourceTimes,calendar) {

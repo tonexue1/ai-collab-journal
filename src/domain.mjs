@@ -11,4 +11,14 @@ const coverage=z.object({readChars:z.number().int().nonnegative(),totalChars:z.n
 const interactionSource=z.object({sessionId:z.string(),snapshotId:z.string(),entries:z.array(entry)});
 const interactionVersion=z.object({resultId:z.string(),sessionId:z.string(),interactionId:z.string(),humanSeq:z.number().int(),sourceSnapshotId:z.string(),basisHash:z.string(),analysisVersion:z.string(),generatedAt:z.number(),route,result:interventionResultSchema,readEvidence,coverage});
 const daySummary=z.object({date:z.string(),timeZone:z.string(),includeArchived:z.boolean(),text:z.string().min(1).max(903),generatedAt:z.number(),route,sourceSessionId:z.string(),sourceFingerprint:z.string(),sessionCount:z.number().int().nonnegative(),humanCount:z.number().int().nonnegative(),sources:z.array(z.object({sessionId:z.string(),title:z.string(),workspaceId:z.string(),workspaceTitle:z.string(),humanSeqs:z.array(z.number().int())})),input:z.json()});
-export const journalSpec=defineDomain({name:'dsh_collab_journal',version:1,tables:{reports:domainTable(reportSchema),versions:domainTable(reportSchema),checkpoints:domainTable(checkpointSchema),interaction_sources:domainTable(interactionSource),interaction_versions:domainTable(interactionVersion),interaction_latest:domainTable(z.object({resultId:z.string()})),day_summaries:domainTable(daySummary)}});
+const schedule = z.object({
+  enabled: z.boolean(),
+  time: z.string(),
+  timeZone: z.string(),
+  firstEligibleDate: z.string(),
+  lastRun: z.object({
+    date: z.string(), at: z.number(), message: z.string(),
+    status: z.enum(['waiting', 'running', 'completed', 'skipped', 'failed', 'interrupted']),
+  }).nullable(),
+});
+export const journalSpec=defineDomain({name:'dsh_collab_journal',version:1,tables:{reports:domainTable(reportSchema),versions:domainTable(reportSchema),checkpoints:domainTable(checkpointSchema),interaction_sources:domainTable(interactionSource),interaction_versions:domainTable(interactionVersion),interaction_latest:domainTable(z.object({resultId:z.string()})),day_summaries:domainTable(daySummary),schedule:domainTable(schedule)}});

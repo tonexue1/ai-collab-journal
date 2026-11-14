@@ -4,6 +4,8 @@ import { pluginBuild } from './build-info.mjs';
 import { syncCatalogDetail } from './catalog-sync.mjs';
 import { pollReader } from './reader-poll.mjs';
 import { DayNavigation, DaySummary } from './day-header.jsx';
+import { PluginSettings } from './plugin-settings.jsx';
+import { observeSchedule } from './schedule-reader.mjs';
 import { filterDayGroups, todayInZone } from './day-navigation.mjs';
 import { createInteractionChangeObserver } from './day-summary-reader.mjs';
 
@@ -133,6 +135,7 @@ function Timeline({id,report}){
 }
 export function JournalPage(){
   const [timeZone]=useState(()=>Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [settingsOpen,setSettingsOpen]=useState(false);
   const [today,setToday]=useState(()=>todayInZone(timeZone)),[selectedDay,setSelectedDay]=useState(()=>todayInZone(timeZone));
   const [summaryRevision, setSummaryRevision] = useState(0);
   const [interactionChanges] = useState(createInteractionChangeObserver);
@@ -140,14 +143,16 @@ export function JournalPage(){
   const [dayState,setDayState]=useState(null),[storedDetail,setDetail]=useState(null),[storedInteractions,setInteractions]=useState(null),[activeRun,setActiveRun]=useState(null);
   const [error,setError]=useState(''),[interactionError,setInteractionError]=useState(''),[loading,setLoading]=useState(true),[starting,setStarting]=useState(false),[revision,setRevision]=useState(0),[view,setView]=useState('expressions');
   const selection=useRef(0),catalogVersion=useRef(0),readerRequest=useRef(0);
-  const daysKey=JSON.stringify([workspace,archived,revision]),days=dayState?.key===daysKey?dayState.value:null;
+  const daysKey=JSON.stringify([workspace,archived]),days=dayState?.key===daysKey?dayState.value:null;
   const all=catalog?.workspaces.flatMap(w=>w.sessions)||[],group=catalog?.workspaces.find(w=>w.id===workspace),workspaceSessions=workspace?group?.sessions||[]:all;
   const matching=s=>s.title.toLowerCase().includes(query.toLowerCase());
   const visibleDays=filterDayGroups(days?.days||[],selectedDay,query);
   const catalogSessions=workspaceSessions.filter(s=>(archived||!s.archived)&&matching(s));
   const candidates=navigation==='days'?visibleDays.flatMap(day=>day.sessions.map(session=>({...session,date:day.date}))):catalogSessions.map(session=>({...session,date:null}));
   const session=candidates.find(s=>s.id===selected?.id&&s.date===selected?.date)||candidates[0],id=session?.id||'',date=session?.date??null;
-  const scopeKey=JSON.stringify([id,date,timeZone,revision]),detail=storedDetail?.id===id?storedDetail:null,interactions=storedInteractions?.key===scopeKey?storedInteractions.value:null;
+  const displayedSession=useRef(null);
+  displayedSession.current=id?{id,date}:null;
+  const scopeKey=JSON.stringify([id,date,timeZone]),detail=storedDetail?.id===id?storedDetail:null,interactions=storedInteractions?.key===scopeKey?storedInteractions.value:null;
   const fullRun=detail?.run?.mode==='interactions'?null:detail?.run,analysisRun=interactions?.analysisRun;
   const active=activeRun?.status==='running'?activeRun:null,running=starting||!!active,fullRunning=starting==='parse'||fullRun?.status==='running',analysisRunning=starting==='analyze'||analysisRun?.status==='running';
   const buildMismatch=catalog&&catalog.pluginBuild?.id!==pluginBuild.id;
@@ -166,19 +171,25 @@ export function JournalPage(){
     catch(e){if(version===catalogVersion.current)setError(e.message);}finally{if(version===catalogVersion.current)setLoading(false);}
   },[interactionChanges]);
   useEffect(()=>{void refresh();return()=>{catalogVersion.current++;selection.current++;};},[refresh]);
+  useEffect(() => observeSchedule({request, onTerminal: () => {
+    // The first session is selected implicitly until the user clicks a row.
+    // Keep it selected even when new activity reorders the refreshed list.
+    if (displayedSession.current) setSelected(displayedSession.current);
+    void refresh();
+  }}), [refresh]);
   useEffect(()=>{const timer=setInterval(()=>setToday(todayInZone(timeZone)),60000);return()=>clearInterval(timer);},[timeZone]);
   useEffect(()=>{
-    const controller=new AbortController();setDayState(null);
-    request('days',{timeZone,includeArchived:archived,...workspace?{workspaceId:workspace}:{}},controller.signal).then(value=>{if(!controller.signal.aborted)setDayState({key:daysKey,value});}).catch(e=>{if(!controller.signal.aborted)setDayState({key:daysKey,error:e.message});});
+    const controller=new AbortController();
+    request('days',{timeZone,includeArchived:archived,...workspace?{workspaceId:workspace}:{}},controller.signal).then(value=>{if(!controller.signal.aborted)setDayState({key:daysKey,value});}).catch(e=>{if(!controller.signal.aborted)setDayState(previous=>({key:daysKey,value:previous?.key===daysKey?previous.value:null,error:e.message}));});
     return()=>controller.abort();
-  },[daysKey,timeZone,archived,workspace]);
+  },[daysKey,timeZone,archived,workspace,revision]);
   useEffect(()=>{
     const version=++selection.current,readVersion=++readerRequest.current,controller=new AbortController();setStarting(false);setInteractionError('');setError('');
     if(!id)return()=>controller.abort();
     request('detail',{id},controller.signal).then(data=>{if(!controller.signal.aborted&&version===selection.current&&readVersion===readerRequest.current)receiveDetail(data);}).catch(e=>{if(!controller.signal.aborted&&version===selection.current&&readVersion===readerRequest.current)setError(e.message);});
     request('interactions',{id,timeZone,...date?{date}:{}},controller.signal).then(value=>{if(!controller.signal.aborted&&version===selection.current&&readVersion===readerRequest.current){setInteractions({key:scopeKey,value});receiveRun(value.analysisRun);}}).catch(e=>{if(!controller.signal.aborted&&version===selection.current&&readVersion===readerRequest.current)setInteractionError(e.message);});
     return()=>controller.abort();
-  },[scopeKey,id,date,timeZone,receiveDetail,receiveRun]);
+  },[scopeKey,id,date,timeZone,receiveDetail,receiveRun,revision]);
   // A running job stays visible across dates/workspaces. Requests for an old
   // selection are aborted and may never replace the newly selected reader.
   useEffect(()=>{
@@ -200,7 +211,7 @@ export function JournalPage(){
       if(!controller.signal.aborted)timer=setTimeout(poll,1300);
     }
     timer=setTimeout(poll,500);return()=>{clearTimeout(timer);controller.abort();};
-  },[active?.id,active?.startedAt,id,date,scopeKey,timeZone,receiveDetail,receiveRun]);
+  },[active?.id,active?.startedAt,id,date,scopeKey,timeZone,receiveDetail,receiveRun,revision]);
   async function act(action,extra={}){
     const version=selection.current;setStarting(action==='parse'?'parse':'analyze');setError('');
     try{
@@ -218,7 +229,13 @@ export function JournalPage(){
   const visibleSessionCount=new Set(candidates.map(s=>s.id)).size;
   function selectDay(value){setSelectedDay(value);setNavigation('days');setSelected(null);}
   return <main className="cj-root" data-testid="journal"><div className="cj-page">
-    <header className="cj-heading"><div><div className="cj-eyebrow">DSH · COLLABORATION JOURNAL</div><h1>协作观察 <span>看清自己的表达与介入</span></h1><p>按日期回看：此前发生了什么，我又补上了什么。</p></div><button onClick={refresh} disabled={loading}>{loading?'读取中…':'刷新会话'}</button></header>
+    <header className="cj-heading"><div><div className="cj-eyebrow">DSH · COLLABORATION JOURNAL</div><h1>协作观察 <span>看清自己的表达与介入</span></h1><p>按日期回看：此前发生了什么，我又补上了什么。</p></div>
+      <div className="cj-heading-actions">
+        <button type="button" onClick={refresh} disabled={loading}>{loading?'读取中…':'刷新会话'}</button>
+        <button type="button" aria-haspopup="dialog" onClick={()=>setSettingsOpen(true)}>插件设置</button>
+      </div>
+    </header>
+    {settingsOpen&&<PluginSettings request={request} timeZone={timeZone} onClose={()=>setSettingsOpen(false)}/>}
     <details className="cj-build"><summary>版本信息</summary><p>界面 {pluginBuild.version} / {pluginBuild.id}</p><p>后台 {catalog?.pluginBuild?`${catalog.pluginBuild.version} / ${catalog.pluginBuild.id}`:'未提供构建标识'}</p></details>
     {buildMismatch&&<p className="cj-notice" role="alert">界面与后台构建不一致。请完全退出 DSH（包括托盘）并重启，再核对版本信息。</p>}
     <div className="cj-daily-header">
@@ -238,7 +255,7 @@ export function JournalPage(){
       {navigation==='days'&&visibleDays.map(day=><section className="cj-date-group" key={day.date}><header><h3>{formatDate(day.date)}</h3><p>{query?'匹配':'当日'} {day.sessions.length} 段会话 / {day.sessions.reduce((sum,item)=>sum+item.humanCount,0)} 次表达</p></header>{day.sessions.map(s=>{const native=all.find(item=>item.id===s.id);return <button className="cj-session" key={s.id} onClick={()=>setSelected({id:s.id,date:day.date})} aria-pressed={id===s.id&&date===day.date}><span className="cj-session-title">{s.title}</span><span className="cj-session-meta"><span>{s.humanCount} 次表达</span>{s.archived&&<span>已归档</span>}</span>{native&&<span className={`cj-status cj-status-${native.status}`}>{native.status==='error'?'':'完整轨迹 · '}{statusText[native.status]}</span>}</button>;})}</section>)}
       {navigation==='sessions'&&catalogSessions.map(s=><button className="cj-session" key={s.id} onClick={()=>setSelected({id:s.id,date:null})} aria-pressed={id===s.id}><span className="cj-session-title">{s.title}</span><span className="cj-session-meta"><time>{formatTime(s.lastActivityAt)}</time><span>{s.humanCount} 次表达</span></span><span className={`cj-status cj-status-${s.status}`}>{s.archived?'已归档 · ':''}{s.status==='error'?'':'完整轨迹 · '}{statusText[s.status]}</span>{s.error&&<small>{s.error}</small>}</button>)}
       {navigation==='days'&&dayState?.key===daysKey&&dayState.error&&<p className="cj-alert" role="alert">{dayState.error}</p>}
-      {!candidates.length&&<p className="cj-list-empty">{navigation==='days'&&!dayState?'正在读取交互日期…':query?'没有匹配的会话':navigation==='days'?'此范围没有人的交互':'没有匹配的会话'}</p>}
+      {!candidates.length&&<p className="cj-list-empty">{navigation==='days'&&dayState?.key!==daysKey?'正在读取交互日期…':query?'没有匹配的会话':navigation==='days'?'此范围没有人的交互':'没有匹配的会话'}</p>}
     </div>{navigation==='days'&&days?.unknownTimeCount>0&&<p className="cj-list-foot">{days.unknownTimeCount} 次表达缺少日期，可在「全部会话」查看。</p>}{navigation==='days'&&days?.errors.length>0&&<details className="cj-list-errors"><summary>{days.errors.length} 段会话读取失败</summary>{days.errors.map(item=><p key={item.id}>{item.id}：{item.error}</p>)}</details>}</aside>
     <section className="cj-reader" aria-label="会话阅读">{!id?<div className="cj-empty"><Icon size={32}/><h2>{navigation==='days'?'按日期看自己的交互':'选择一段会话'}</h2><p>人的原话可直接阅读，点击整理后再看前因、贡献与分类。</p></div>:<>
       <header className="cj-reader-head"><div><div className="cj-eyebrow">{view==='expressions'?`${formatDate(date)} · 我的交互`:'整段会话 · 全部日期'}</div><h2>{session.title}</h2><p>{view==='expressions'?`${interactions?.items.length??session.humanCount} 次表达 · 整理后可按分类回看，并核对原文依据。`:<>{detail?.route?`${detail.route.provider} / ${detail.route.model}`:'复用此会话的 DSH 模型'}{detail?.report?` · 生成于 ${formatTime(detail.report.generatedAt)}`:''}</>}</p></div>{view==='expressions'?<button className="cj-primary" disabled={running||!interactions?.items.length||!detail?.route} onClick={()=>analyze(undefined,allAnalyzed)}>{analysisRunning?'正在整理…':allAnalyzed?(date?'重新整理当天交互':'重新整理这段会话'):(date?'整理当天交互':'整理这段会话')}</button>:<button className="cj-primary" disabled={running||!detail?.humanCount||!detail.route} onClick={()=>act('parse')}>{fullRunning?'正在解析…':detail?.checkpoint?'继续解析':detail?.report?'重新解析':'解析轨迹'}</button>}</header>
@@ -267,5 +284,6 @@ export const inject=['slots','connection'];
 export function apply(ctx){
   ctx.effect(()=>{const style=document.createElement('style');style.dataset.plugin=name;style.textContent=css;document.head.append(style);return()=>style.remove();});
   ctx.slots.inject('main',()=>ctx.slots.register({name:'main',key:name},()=>React.createElement(JournalPage)));
+  ctx.slots.inject('plugins.bundle.config',()=>ctx.slots.register({name:'plugins.bundle.config',key:name},({view})=>view==='page'?<PluginSettings request={request} timeZone={Intl.DateTimeFormat().resolvedOptions().timeZone}/>:null));
   ctx.slots.inject('sidebar.panellist',()=>ctx.slots.register({name:'sidebar.panellist',id:name,order:21,label:()=> '协作观察'},props=>React.createElement(Icon,props)));
 }

@@ -3,6 +3,47 @@ import { createRuntime,delay } from './dsh-runtime.mjs';
 import { verifyStorageUpgrade } from './storage-upgrade.mjs';
 await verifyStorageUpgrade();
 
+async function verifyScheduleAcrossRestart(runtime) {
+  const read = () => runtime.api('getSchedule');
+  const write = settings => runtime.api('setSchedule', settings);
+  const modelCalls = async () => (await runtime.api('status', {}, 'journal-test')).calls;
+  const before = await modelCalls();
+  const defaults = await read();
+  assert.equal(defaults.enabled, false);
+  assert.equal(defaults.time, '21:00');
+  assert.equal(defaults.lastRun, null);
+
+  // Keep the configured time several hours in the future even when CI runs
+  // late at night in UTC. The host must stay idle during save and restore.
+  const timeZone = new Date().getUTCHours() < 18 ? 'UTC' : 'Pacific/Honolulu';
+  const scheduled = { enabled: true, time: '23:45', timeZone };
+  const saved = await write(scheduled);
+  assert.deepEqual(saved, { ...scheduled, lastRun: null });
+  assert.deepEqual(await read(), saved);
+
+  for (const invalid of [{ time: '24:10' }, { timeZone: 'Invalid/TimeZone' }]) {
+    const rejected = await fetch(`${runtime.base}/api/dsh-collab-journal`, {
+      method: 'POST',
+      headers: { cookie: runtime.cookie, origin: runtime.base, 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'setSchedule', ...scheduled, ...invalid }),
+    });
+    assert.equal(rejected.status, 400);
+    assert.equal((await rejected.json()).ok, false);
+    assert.deepEqual(await read(), saved, 'a refused edit must preserve the last saved schedule');
+  }
+  assert.equal(await modelCalls(), before, 'saving a future schedule must not call the model');
+
+  await runtime.stop();
+  await runtime.start();
+  assert.deepEqual(await read(), saved, 'the new host must restore the saved local time and zone');
+  assert.equal(await modelCalls(), 0, 'a restored future schedule must not run early');
+
+  const disabled = { ...scheduled, enabled: false };
+  assert.deepEqual(await write(disabled), { ...disabled, lastRun: null });
+  assert.deepEqual(await read(), { ...disabled, lastRun: null });
+  assert.equal(await modelCalls(), 0);
+}
+
 async function verifyDaySummaries(runtime,pluginBuild){
   const fixture=(action,params={})=>runtime.api(action,params,'journal-test');
   const read=scope=>runtime.api('daySummary',scope);
@@ -66,7 +107,7 @@ async function verifyDaySummaries(runtime,pluginBuild){
   assert.equal(updated.summary.humanCount,3);assert.notEqual(updated.summary.sourceFingerprint,first.summary.sourceFingerprint);
   assert.deepEqual(requestHumans((await fixture('status')).dayInputs.at(-1)),[['journal-day-a',['午夜后：补充上下文。','追加反馈：验证失败，先暂停。']],['journal-day-b',['接口检查仍未完成。']]]);
 
-  await runtime.stop();await runtime.start();
+  await verifyScheduleAcrossRestart(runtime);
   const cold=await read(utc),coldArchived=await read(allShanghai);
   assert.deepEqual(cold.summary,updated.summary);assert.equal(cold.stale,false);
   assert.deepEqual(coldArchived.summary,all.summary);assert.equal(coldArchived.stale,true);
@@ -201,5 +242,5 @@ try{
   assert.deepEqual(hiddenDays.totals,{sessionCount:7,humanCount:9,archivedSessionCount:7,hiddenArchivedSessionCount:7});
   assert.deepEqual(allDays.totals,{sessionCount:14,humanCount:16,archivedSessionCount:7,hiddenArchivedSessionCount:0});
   await verifyDaySummaries(runtime,catalogue.pluginBuild);
-  console.log(`DSH ${runtime.runtimeVersion}: native workspace/session/LLM/storage, dates from human event times, model-free browsing, scoped day summary generation/refresh/persistence, intervention result schema and frozen citations, append reuse, failed rerun preservation, cold restart, before/after pagination, stale revisions, full trajectory regression and authentication passed (deterministic adapter, not semantic model acceptance).`);
+  console.log(`DSH ${runtime.runtimeVersion}: native workspace/session/LLM/storage, dates from human event times, model-free browsing, scoped day summary generation/refresh/persistence, schedule validation and restoration without early model calls, intervention result schema and frozen citations, append reuse, failed rerun preservation, cold restart, before/after pagination, stale revisions, full trajectory regression and authentication passed (deterministic adapter, not semantic model acceptance).`);
 }catch(error){console.error(runtime.log);throw error;}finally{await runtime.stop();}

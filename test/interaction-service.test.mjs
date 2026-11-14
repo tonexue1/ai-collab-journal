@@ -63,7 +63,8 @@ test('HTTP analysis exposes frozen evidence only for its own session and validat
  const h=harness();assert.equal(typeof h.journal.startInteractions,'function');await assert.rejects(h.journal.startInteractions('a',{interactionId:'h999'}),e=>e.status===404);
  await run(h,{interactionId:'h3'});const resultId=(await h.journal.interactions('a')).items.find(i=>i.id==='h3').analysis.resultId;
  await assert.rejects(h.journal.interactionEvidence('other',resultId),e=>e.status===404);await assert.rejects(h.journal.interactionEvidence('a',resultId,6),e=>e.status===404);
- let endpoint;await apply({...h.ctx,storageDomain:{open:async()=>h.domain},effect:f=>f(),connection:{fetch:{register:r=>{endpoint=r;return()=>{};}}}});
+ const domain={...h.domain,table:name=>name==='schedule'?{get:()=>null}:h.domain.table(name)};
+ let endpoint;await apply({...h.ctx,storageDomain:{open:async()=>domain},effect:f=>f(),connection:{fetch:{register:r=>{endpoint=r;return()=>{};}}}});
  const res=await endpoint.fetch(new Request('http://localhost/api',{method:'POST',body:JSON.stringify({action:'interactionEvidence',id:'a',resultId})}));assert.equal(res.status,200);const x=await res.json();assert.ok(x.value.entries.some(e=>e.seq===3));assert.ok(x.value.entries.every(e=>e.seq<=3));
 });
 test('frozen evidence exposes only actually read entry metadata as well as text',async()=>{
@@ -78,4 +79,31 @@ test('each failed result retains field-level diagnosis, exact call accounting, r
 });
 test('a shared-source storage failure stops before models and exposes a terminal diagnostic',async()=>{
  const h=harness();h.state.failSourceWrite=true;const r=await run(h);assert.equal(r.status,'failed');assert.match(r.error,/storage unavailable/);assert.equal(r.modelCalls,0);assert.equal(h.tables.interaction_latest.size,0);assert.equal(r.diagnostic.status,'failed');assert.equal(r.diagnostic.stage,'保存共享原文快照');assert.deepEqual(r.diagnostic.route,{provider:'fixture',model:'one'});
+});
+
+test('scheduled intervention work keeps protected prefixes local, continues earlier safe anchors, and never fabricates redacted evidence', async () => {
+  const h = harness(), token = 'synthetic-startup-token-for-scheduler';
+  h.events[4].data.content[0].text = `检查 http://127.0.0.1:19001/?token=${token} 后继续暂停`;
+  const options = { date: '2026-11-04', timeZone: 'UTC' };
+  await h.journal.startInteractions('a', options, { scheduled: true });
+  await h.journal.active?.pending;
+  const task = h.journal.runs.get('a');
+  assert.deepEqual(h.calls.map(call => call.seq), [3]);
+  assert.equal(task.status, 'failed'); assert.equal(task.completed, 1);
+  assert.equal(task.errors[0].interactionId, 'h5'); assert.equal(task.errors[0].code, 'SCHEDULE_PROTECTED_INPUT');
+  assert.equal(task.errors[0].diagnostic.modelCalls, 0); assert.ok(!JSON.stringify(task).includes(token));
+  const [safe, guarded] = (await h.journal.interactions('a', options)).items;
+  assert.ok(safe.analysis); assert.equal(guarded.analysis, null); assert.ok(guarded.human.text.includes(token));
+  await run(h, { interactionId: 'h5' }); // Manual analysis uses its existing explicitly chosen protocol.
+  assert.equal(h.calls.length, 2); assert.ok((await h.journal.interactions('a', options)).items[1].analysis);
+});
+
+test('a credential copied before its identifying launch URL prevents a scheduled request containing the bare value', async () => {
+  const h = harness(), token = 'another-synthetic-startup-credential';
+  h.events[1].data.message.content[0].text = `原样复制 ${token}`;
+  h.events[5].data.message.content[0].text = `http://[::1]:19001/?token=${token}。`;
+  await h.journal.startInteractions('a', { date: '2026-11-04', timeZone: 'UTC' }, { scheduled: true });
+  await h.journal.active?.pending;
+  assert.equal(h.calls.length, 0);
+  assert.deepEqual(h.journal.runs.get('a').errors.map(error => error.code), ['SCHEDULE_PROTECTED_INPUT','SCHEDULE_PROTECTED_INPUT']);
 });

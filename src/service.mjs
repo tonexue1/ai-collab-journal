@@ -7,7 +7,7 @@ import { indexInteractions } from './interactions.mjs';
 import { createProvenanceIndex } from './provenance.mjs';
 import { interactionCalendar } from './days.mjs';
 import { createInterventionBasis, interventionBasisHash, analyzeIntervention, INTERVENTION_SYSTEM } from './interventions.mjs';
-import { DAY_SUMMARY_INPUT_LIMIT,DAY_SUMMARY_SYSTEM,daySummaryKey,daySummaryFingerprint,protectDaySummaryInput,dateInterventionEvidence,summarizeDay } from './day-summary.mjs';
+import { DAY_SUMMARY_INPUT_LIMIT,DAY_SUMMARY_SYSTEM,daySummaryKey,daySummaryFingerprint,protectDaySummaryInput,firstProtectedInterventionSource,dateInterventionEvidence,summarizeDay } from './day-summary.mjs';
 
 export class JournalError extends Error {constructor(message,status=400){super(message);this.status=status;}}
 function calendar(options){try{return interactionCalendar(options);}catch(error){throw new JournalError(error.message);}}
@@ -161,21 +161,23 @@ export class Journal {
     current.coverage??={sessionCount:summary?.sessionCount??0,humanCount:summary?.humanCount??0};
     return {scope,summary,stale:!!summary&&(summary.sourceFingerprint!==current.sourceFingerprint||!!current.errors.length||!!current.unknownTimeCount),run:structuredClone(this.dayRuns.get(key)??null),coverage:current.coverage,canGenerate:!current.reason,reason:current.reason,inputChars:current.inputChars,inputLimit:DAY_SUMMARY_INPUT_LIMIT,route:current.route};
   }
-  async generateDaySummary(options={}){
+  async generateDaySummary(options={},preparedInput){
     if(this.closed)throw new JournalError('插件正在卸载',503);
     const scope=this.dayScope(options),key=daySummaryKey(scope);
     if(this.dailyActive){if(this.dailyActive.key===key)return structuredClone(this.dayRuns.get(key));throw new JournalError('已有当日总结正在生成，请稍后再试',409);}
     if(this.active)throw new JournalError('已有解析任务正在处理，请稍后再生成当日总结',409);
     const abort=new AbortController(),run={id:randomUUID(),mode:'day-summary',scope,status:'running',stage:'读取当天的人类表达',startedAt:Date.now(),modelCalls:0};
     this.dayRuns.set(key,run);
-    const active={key,abort};this.dailyActive=active;
-    active.pending=this.executeDaySummary(scope,active,run);
+    const active={key,abort,run};this.dailyActive=active;
+    active.pending=this.executeDaySummary(scope,active,run,preparedInput);
     return structuredClone(run);
   }
-  async executeDaySummary(scope,active,run){
+  async executeDaySummary(scope,active,run,preparedInput){
     const signal=active.abort.signal;let current,failedInputChars;
     try{
-      active.collection=this.collectDaySummary(scope,signal);
+      // The scheduler already checked this exact snapshot after classifying
+      // all of its expressions. Manual requests collect their own snapshot.
+      active.collection=preparedInput?Promise.resolve(preparedInput):this.collectDaySummary(scope,signal);
       current=await active.collection;signal.throwIfAborted();
       run.route=current.route;
       if(current.reason)throw new JournalError(current.reason);
@@ -199,12 +201,12 @@ export class Journal {
     const result=latest?this.domain.table('interaction_versions').get(latest.resultId):null;
     return result?.sessionId===id&&result.interactionId===anchorId?result:null;
   }
-  async startInteractions(id,{date,timeZone,interactionId,force=false}={}){
+  async startInteractions(id,{date,timeZone,interactionId,force=false}={},{scheduled=false}={}){
     if(this.closed)throw new JournalError('插件正在卸载',503);
     if(this.dailyActive)throw new JournalError('正在生成当日总结，请稍后再整理交互',409);
     const dates=calendar({date,timeZone});
     if(typeof force!=='boolean'||interactionId!==undefined&&(typeof interactionId!=='string'||!/^h\d+$/.test(interactionId)))throw new JournalError('无效的介入整理范围');
-    const scopeKey=JSON.stringify({date:date??null,timeZone:dates.timeZone,interactionId:interactionId??null,force});
+    const scopeKey=JSON.stringify({date:date??null,timeZone:dates.timeZone,interactionId:interactionId??null,force,scheduled});
     if(this.active){
       if(this.active.id===id&&this.active.mode==='interactions'&&this.active.scopeKey===scopeKey)return structuredClone(this.runs.get(id));
       throw new JournalError('已有解析任务正在处理，请稍后再试',409);
@@ -212,11 +214,11 @@ export class Journal {
     const abort=new AbortController(),run={id,mode:'interactions',status:'running',stage:'读取介入前原文',startedAt:Date.now(),scopeDate:date??null,total:0,completed:0,modelCalls:0,errors:[]};
     this.runs.set(id,run);
     let ready,failed;const prepared=new Promise((resolve,reject)=>{ready=resolve;failed=reject;});
-    const active={id,mode:'interactions',scopeKey,abort};this.active=active;
-    active.pending=this.executeInteractions(id,{dates,interactionId,force},abort,run,ready,failed);
+    const active={id,mode:'interactions',scopeKey,abort,run};this.active=active;
+    active.pending=this.executeInteractions(id,{dates,interactionId,force,scheduled},abort,run,ready,failed);
     return prepared;
   }
-  async executeInteractions(id,{dates,interactionId,force},abort,run,ready,failed){
+  async executeInteractions(id,{dates,interactionId,force,scheduled},abort,run,ready,failed){
     let prepared=false;
     try {
       const signal=abort.signal,log=await this.source(id);signal.throwIfAborted();
@@ -233,11 +235,17 @@ export class Journal {
         if(stored){if(stored.sessionId!==id||stored.snapshotId!==snapshotId||fingerprint(stored.entries)!==snapshotId)throw new Error('已保存的介入原文快照不匹配');}
         else await sources.put(sourceKey,{sessionId:id,snapshotId,entries:log.entries});
         signal.throwIfAborted();
+        const protectedFrom = scheduled ? firstProtectedInterventionSource(log.entries) : Infinity;
         const generate=modelGenerator(this.ctx.llm,route,id,{system:INTERVENTION_SYSTEM});let cursor=0;
         const worker=async()=>{
           while(cursor<targets.length&&!signal.aborted){
             const item=targets[cursor++],startedAt=Date.now();let stage='整理介入',modelCalls=0;
             try {
+              if (item.human.seq >= protectedFrom) {
+                throw Object.assign(new Error('可供此次介入读取的原文含本机 DSH 启动凭证，已跳过自动整理。'), {
+                  code: 'SCHEDULE_PROTECTED_INPUT', analysisStage: '检查定时任务的原文',
+                });
+              }
               const basis=createInterventionBasis(log.entries,item.id);
               const output=await analyzeIntervention(generate,basis,item.id,signal,{onCall:()=>{modelCalls++;run.modelCalls++;},onStage:value=>{stage=value;run.stage=`${item.id} · ${value}`;}});
               signal.throwIfAborted();stage='保存介入与证据';run.stage=`${item.id} · ${stage}`;

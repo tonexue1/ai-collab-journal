@@ -99,7 +99,8 @@ test('invalid ranges and absent human anchors fail explicitly',async()=>{
 
 test('HTTP read actions serve the index and reject stale context with 409',async()=>{
  const events=[human(1),ai(2),human(3)],h=harness(events);let endpoint;
- const ctx={...h.ctx,storageDomain:{open:async()=>h.domain},effect(fn){fn();},connection:{fetch:{register(route){endpoint=route;return()=>{};}}}};
+ const domain={...h.domain,table:name=>name==='schedule'?{get:()=>null}:h.domain.table(name)};
+ const ctx={...h.ctx,storageDomain:{open:async()=>domain},effect(fn){fn();},connection:{fetch:{register(route){endpoint=route;return()=>{};}}}};
  await apply(ctx);
  const request=body=>endpoint.fetch(new Request('http://localhost/api/dsh-collab-journal',{method:'POST',body:JSON.stringify(body)}));
  const listing=await request({action:'interactions',id:'a'});assert.equal(listing.status,200);const payload=await listing.json();assert.deepEqual(payload.value.items.map(x=>x.id),['h1','h3']);

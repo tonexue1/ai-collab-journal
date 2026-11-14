@@ -1,18 +1,27 @@
 import { journalSpec } from './domain.mjs';
 import { Journal, JournalError } from './service.mjs';
+import { DailySchedule } from './schedule.mjs';
+import { runScheduledWork } from './scheduled-work.mjs';
 export const name='dsh-collab-journal';
 export const inject=['sessionQuery','workspaceRegistry','storageDomain','llm','connection'];
 export async function apply(ctx){
   const domain=await ctx.storageDomain.open(journalSpec),journal=new Journal(ctx,domain);
-  ctx.effect(()=>()=>journal.close());
+  const schedule = new DailySchedule(domain.table('schedule'), journal, runScheduledWork);
+  ctx.effect(() => async () => {
+    try { await schedule.close(); }
+    finally { await journal.close(); }
+  });
+  await schedule.start();
   ctx.effect(()=>ctx.connection.fetch.register({path:'/api/dsh-collab-journal',methods:['POST'],requestBody:'buffered',async fetch(request){
     try {
       const text=await request.text();if(text.length>4096)throw new JournalError('请求过大',413);
       let body;try {body=JSON.parse(text);}catch{throw new JournalError('无效 JSON');}
       if(!body||typeof body!=='object')throw new JournalError('无效请求');
-      if(!['catalog','days','daySummary','generateDaySummary'].includes(body.action)&&(typeof body.id!=='string'||!body.id||body.id.length>200))throw new JournalError('缺少会话标识');
+      if(!['catalog','days','daySummary','generateDaySummary','getSchedule','setSchedule'].includes(body.action)&&(typeof body.id!=='string'||!body.id||body.id.length>200))throw new JournalError('缺少会话标识');
       let value;
-      if(body.action==='catalog')value=await journal.catalog();
+      if(body.action==='getSchedule')value=schedule.get();
+      else if(body.action==='setSchedule')value=await schedule.set(body);
+      else if(body.action==='catalog')value=await journal.catalog();
       else if(body.action==='days')value=await journal.days(body);
       else if(body.action==='daySummary')value=await journal.daySummary(body);
       else if(body.action==='generateDaySummary')value=await journal.generateDaySummary(body);
