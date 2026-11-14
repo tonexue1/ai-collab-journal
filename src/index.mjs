@@ -10,10 +10,12 @@ export async function apply(ctx){
       const text=await request.text();if(text.length>4096)throw new JournalError('请求过大',413);
       let body;try {body=JSON.parse(text);}catch{throw new JournalError('无效 JSON');}
       if(!body||typeof body!=='object')throw new JournalError('无效请求');
-      if(!['catalog','days'].includes(body.action)&&(typeof body.id!=='string'||!body.id||body.id.length>200))throw new JournalError('缺少会话标识');
+      if(!['catalog','days','daySummary','generateDaySummary'].includes(body.action)&&(typeof body.id!=='string'||!body.id||body.id.length>200))throw new JournalError('缺少会话标识');
       let value;
       if(body.action==='catalog')value=await journal.catalog();
       else if(body.action==='days')value=await journal.days(body);
+      else if(body.action==='daySummary')value=await journal.daySummary(body);
+      else if(body.action==='generateDaySummary')value=await journal.generateDaySummary(body);
       else if(body.action==='detail')value=await journal.detail(body.id);
       else if(body.action==='interactions')value=await journal.interactions(body.id,body);
       else if(body.action==='analyzeInteractions')value=await journal.startInteractions(body.id,body);

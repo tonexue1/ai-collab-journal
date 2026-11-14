@@ -33,6 +33,15 @@ test('archive totals count human-bearing sessions and distinguish hidden archive
  assert.deepEqual([hidden.days[0].archivedSessionCount,hidden.days[0].hiddenArchivedSessionCount],[1,1]);
  const shown=await journal.days({timeZone:'Asia/Shanghai',includeArchived:true});assert.deepEqual(shown.totals,{sessionCount:3,humanCount:4,archivedSessionCount:1,hiddenArchivedSessionCount:0});assert.deepEqual([shown.days[0].archivedSessionCount,shown.days[0].hiddenArchivedSessionCount],[1,0]);
 });
+test('daily archive counts retain archive-only dates and obey the workspace filter',async()=>{
+ const {journal,logs}=harness();
+ logs.get('b').push(human(2,'2026-11-05T01:00:00Z'),human(3,'2026-11-05T02:00:00Z'));
+ const scope={timeZone:'Asia/Shanghai',workspaceId:'w'},hidden=await journal.days(scope),shown=await journal.days({...scope,includeArchived:true});
+ const counts={'2026-11-04':1,'2026-11-05':1};
+ assert.deepEqual(hidden.archivedByDate,counts);assert.deepEqual(shown.archivedByDate,counts);
+ assert.equal(hidden.days.some(d=>d.date==='2026-11-05'),false);assert.equal(shown.days.find(d=>d.date==='2026-11-05').humanCount,2);
+ assert.deepEqual((await journal.days({...scope,workspaceId:'other'})).archivedByDate,{});
+});
 test('timezone changes day membership, and invalid zones or dates fail explicitly',async()=>{
  const {journal}=harness();assert.equal(typeof journal.days,'function');
  const utc=await journal.days({timeZone:'UTC'});assert.equal(utc.days.length,1);assert.equal(utc.days[0].humanCount,2);

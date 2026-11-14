@@ -7,6 +7,7 @@ import { indexInteractions } from './interactions.mjs';
 import { createProvenanceIndex } from './provenance.mjs';
 import { interactionCalendar } from './days.mjs';
 import { createInterventionBasis, interventionBasisHash, analyzeIntervention, INTERVENTION_SYSTEM } from './interventions.mjs';
+import { DAY_SUMMARY_INPUT_LIMIT,DAY_SUMMARY_SYSTEM,daySummaryKey,daySummaryFingerprint,protectDaySummaryInput,dateInterventionEvidence,summarizeDay } from './day-summary.mjs';
 
 export class JournalError extends Error {constructor(message,status=400){super(message);this.status=status;}}
 function calendar(options){try{return interactionCalendar(options);}catch(error){throw new JournalError(error.message);}}
@@ -17,7 +18,7 @@ function interventionDiagnostic(error,run,stage,modelCalls,startedAt,status){
   };
 }
 export class Journal {
-  constructor(ctx,domain){this.ctx=ctx;this.domain=domain;this.runs=new Map();this.active=null;this.closed=false;}
+  constructor(ctx,domain){this.ctx=ctx;this.domain=domain;this.runs=new Map();this.active=null;this.dayRuns=new Map();this.dailyActive=null;this.closed=false;}
   async source(id){
     let log;
     try {log=await this.ctx.sessionQuery.readSession(id);}catch{throw new JournalError('DSH 会话读取失败；请刷新或检查原会话',404);}
@@ -80,11 +81,13 @@ export class Journal {
         }catch(error){errors.push({id:row.id,error:error.message});}
       }
     }));
+    const archivedByDate={};
     const days=[...groups].sort(([a],[b])=>b.localeCompare(a)).map(([date,all])=>{
       const sessions=all.filter(row=>includeArchived||!row.archived).sort((a,b)=>b.lastHumanAt-a.lastHumanAt||a.id.localeCompare(b.id)),archivedSessionCount=all.filter(row=>row.archived).length;
+      if(archivedSessionCount)archivedByDate[date]=archivedSessionCount;
       return {date,humanCount:sessions.reduce((sum,s)=>sum+s.humanCount,0),sessionCount:sessions.length,archivedSessionCount,hiddenArchivedSessionCount:includeArchived?0:archivedSessionCount,sessions};
     }).filter(day=>day.sessionCount>0);
-    return {timeZone:dates.timeZone,days,totals,unknownTimeCount,errors:errors.sort((a,b)=>a.id.localeCompare(b.id))};
+    return {timeZone:dates.timeZone,days,totals,archivedByDate,unknownTimeCount,errors:errors.sort((a,b)=>a.id.localeCompare(b.id))};
   }
   async interactions(id,options={}){
     const dates=calendar(options);
@@ -96,6 +99,101 @@ export class Journal {
     const run=this.runs.get(id);
     return {id,revision:fingerprint(entries),timeZone:dates.timeZone,items,analysisRun:run?.mode==='interactions'?structuredClone(run):null};
   }
+  dayScope({date,timeZone,includeArchived=false}={}){
+    const dates=calendar({date,timeZone});
+    if(!dates.date||typeof includeArchived!=='boolean')throw new JournalError('请选择有效的日期与归档范围');
+    return {date:dates.date,timeZone:dates.timeZone,includeArchived};
+  }
+  async collectDaySummary(scope,signal){
+    const dates=calendar(scope),workspaces=this.ctx.workspaceRegistry.list(),archived=new Set(this.ctx.workspaceRegistry.archivedSessionIds);
+    const records=(await this.ctx.sessionQuery.listSessions()).filter(({header})=>header.origin!=='subagent'&&(scope.includeArchived||!archived.has(header.id)));
+    const sessions=[],routes=new Map(),errors=[];let cursor=0,unknownTimeCount=0;
+    const readers=await Promise.allSettled(Array.from({length:Math.min(4,records.length)},async()=>{
+      while(cursor<records.length){
+        signal?.throwIfAborted();const id=records[cursor++].header.id;
+        try{
+          const log=await this.source(id);signal?.throwIfAborted();
+          const humans=log.entries.filter(entry=>entry.role==='user');
+          unknownTimeCount+=humans.filter(entry=>dates.day(entry.time)===null).length;
+          const selected=humans.filter(entry=>dates.day(entry.time)===scope.date);if(!selected.length)continue;
+          const workspace=workspaces.find(w=>w.sessionIds.includes(id));
+          let sourceTimes;
+          const items=selected.map(entry=>{
+            const anchorId=`h${entry.seq}`,stored=this.storedInteraction(id,anchorId);
+            let analysis;
+            if(stored&&stored.basisHash===interventionBasisHash(log.entries,anchorId)){
+              sourceTimes??=new Map(log.entries.map(source=>[source.seq,source.time]));
+              analysis=dateInterventionEvidence(stored.result,sourceTimes,dates);
+            }
+            return {id:anchorId,seq:entry.seq,time:entry.time,text:entry.text,...analysis?{analysis}:{}};
+          });
+          sessions.push({sessionId:id,title:sessionTitle(log,id),workspaceId:workspace?.id??'__ungrouped__',workspaceTitle:workspace?.title??'未归入 workspace',humans:items});
+          const route=routeFrom(log.events);if(route)routes.set(id,route);
+        }catch(error){if(signal?.aborted)throw error;errors.push({sessionId:id,error:error.message});}
+      }
+    }));
+    const failedReader=readers.find(result=>result.status==='rejected');if(failedReader)throw failedReader.reason;
+    sessions.sort((a,b)=>a.humans[0].time-b.humans[0].time||a.sessionId.localeCompare(b.sessionId));
+    const input=protectDaySummaryInput({kind:'day-summary',...scope,sessions}),sourceFingerprint=daySummaryFingerprint(input),inputChars=JSON.stringify(input).length;
+    const coverage={sessionCount:sessions.length,humanCount:sessions.reduce((count,s)=>count+s.humans.length,0)},sourceSessionId=sessions.find(s=>routes.has(s.sessionId))?.sessionId??null,route=routes.get(sourceSessionId)??null;
+    let reason=null;
+    if(errors.length)reason=`${errors.length} 段会话读取失败，无法确认当天全部内容；请先修复读取后再生成总结。`;
+    else if(unknownTimeCount)reason=`${unknownTimeCount} 次表达缺少有效时间，无法确认当天范围；请先核对原会话。`;
+    else if(!coverage.humanCount)reason='这一天没有人的表达。';
+    else if(inputChars>DAY_SUMMARY_INPUT_LIMIT)reason=`当日总结输入 ${inputChars} 字符，超过 ${DAY_SUMMARY_INPUT_LIMIT} 字符预算上限；本次未截断或遗漏表达。`;
+    else if(!route)reason='当天会话没有可复用的模型；请先在 DSH 选择模型并完成一次对话。';
+    const sources=input.sessions.map(s=>({sessionId:s.sessionId,title:s.title,workspaceId:s.workspaceId,workspaceTitle:s.workspaceTitle,humanSeqs:s.humans.map(h=>h.seq)}));
+    return {input,sourceFingerprint,inputChars,coverage,route,sourceSessionId,sources,reason,errors,unknownTimeCount};
+  }
+  async daySummary(options={}){
+    const scope=this.dayScope(options),key=daySummaryKey(scope);let current;
+    const active=this.dailyActive?.key===key?this.dailyActive:null;
+    try{
+      current=await (active?.collection??this.collectDaySummary(scope));
+      // Poll the immutable job input while running. If the task ended during
+      // this read, compare the saved output with the live source one last time.
+      if(active&&this.dailyActive!==active)current=await this.collectDaySummary(scope);
+    }
+    catch{current={sourceFingerprint:null,coverage:null,reason:'当天会话目录读取失败，暂时无法核对完整范围；已有总结仍可阅读。',inputChars:0,route:null,errors:[{sessionId:'',error:'DSH 会话目录读取失败'}],unknownTimeCount:0};}
+    // A poll can span model completion. Read the saved result and run in the
+    // same synchronous turn so a terminal response always contains its result.
+    const stored=this.domain.table('day_summaries').get(key),summary=stored?(({input,...record})=>record)(stored):null;
+    current.coverage??={sessionCount:summary?.sessionCount??0,humanCount:summary?.humanCount??0};
+    return {scope,summary,stale:!!summary&&(summary.sourceFingerprint!==current.sourceFingerprint||!!current.errors.length||!!current.unknownTimeCount),run:structuredClone(this.dayRuns.get(key)??null),coverage:current.coverage,canGenerate:!current.reason,reason:current.reason,inputChars:current.inputChars,inputLimit:DAY_SUMMARY_INPUT_LIMIT,route:current.route};
+  }
+  async generateDaySummary(options={}){
+    if(this.closed)throw new JournalError('插件正在卸载',503);
+    const scope=this.dayScope(options),key=daySummaryKey(scope);
+    if(this.dailyActive){if(this.dailyActive.key===key)return structuredClone(this.dayRuns.get(key));throw new JournalError('已有当日总结正在生成，请稍后再试',409);}
+    if(this.active)throw new JournalError('已有解析任务正在处理，请稍后再生成当日总结',409);
+    const abort=new AbortController(),run={id:randomUUID(),mode:'day-summary',scope,status:'running',stage:'读取当天的人类表达',startedAt:Date.now(),modelCalls:0};
+    this.dayRuns.set(key,run);
+    const active={key,abort};this.dailyActive=active;
+    active.pending=this.executeDaySummary(scope,active,run);
+    return structuredClone(run);
+  }
+  async executeDaySummary(scope,active,run){
+    const signal=active.abort.signal;let current,failedInputChars;
+    try{
+      active.collection=this.collectDaySummary(scope,signal);
+      current=await active.collection;signal.throwIfAborted();
+      run.route=current.route;
+      if(current.reason)throw new JournalError(current.reason);
+      const generate=modelGenerator(this.ctx.llm,current.route,current.sourceSessionId,{system:DAY_SUMMARY_SYSTEM});
+      const text=await summarizeDay(generate,current.input,signal,{onCall:()=>run.modelCalls++,onStage:stage=>run.stage=stage});
+      signal.throwIfAborted();run.stage='保存当日总结';
+      await this.domain.table('day_summaries').put(active.key,{...scope,text,generatedAt:Date.now(),route:current.route,sourceSessionId:current.sourceSessionId,sourceFingerprint:current.sourceFingerprint,...current.coverage,sources:current.sources,input:current.input});
+      run.status='completed';run.stage='当日总结已保存';
+    }catch(error){
+      failedInputChars=error.inputChars;
+      run.status=signal.aborted?'cancelled':'failed';run.error=error.message;
+      run.diagnostic=interventionDiagnostic(error,run,run.stage,run.modelCalls,run.startedAt,run.status);
+    }finally{
+      run.finishedAt=Date.now();run.diagnostic??=interventionDiagnostic(null,run,run.stage,run.modelCalls,run.startedAt,run.status);
+      if(current)Object.assign(run.diagnostic,{inputChars:failedInputChars??current.inputChars,inputLimit:DAY_SUMMARY_INPUT_LIMIT,coverage:current.coverage,sourceErrors:current.errors,unknownTimeCount:current.unknownTimeCount});
+      if(this.dailyActive===active)this.dailyActive=null;
+    }
+  }
   storedInteraction(id,anchorId){
     const latest=this.domain.table('interaction_latest').get(`${id}.${anchorId}`);
     const result=latest?this.domain.table('interaction_versions').get(latest.resultId):null;
@@ -103,6 +201,7 @@ export class Journal {
   }
   async startInteractions(id,{date,timeZone,interactionId,force=false}={}){
     if(this.closed)throw new JournalError('插件正在卸载',503);
+    if(this.dailyActive)throw new JournalError('正在生成当日总结，请稍后再整理交互',409);
     const dates=calendar({date,timeZone});
     if(typeof force!=='boolean'||interactionId!==undefined&&(typeof interactionId!=='string'||!/^h\d+$/.test(interactionId)))throw new JournalError('无效的介入整理范围');
     const scopeKey=JSON.stringify({date:date??null,timeZone:dates.timeZone,interactionId:interactionId??null,force});
@@ -204,6 +303,7 @@ export class Journal {
   matchesCheckpoint(saved,snapshotId,route,report){return !!saved&&saved.jobId!==report?.jobId&&saved.snapshotId===snapshotId&&saved.analysisVersion===ANALYSIS_VERSION&&saved.route.provider===route?.provider&&saved.route.model===route?.model;}
   async start(id){
     if(this.closed)throw new JournalError('插件正在卸载',503);
+    if(this.dailyActive)throw new JournalError('正在生成当日总结，请稍后再解析轨迹',409);
     if(this.active){if(this.active.id===id&&this.active.mode!=='interactions')return this.runs.get(id);throw new JournalError('已有解析任务正在处理，请稍后再试',409);}
     // Claim before the first await; double clicks cannot start competing writes.
     const abort=new AbortController();this.active={id,abort};
@@ -261,5 +361,5 @@ export class Journal {
     return {snapshotId,highlight:node.seqs,entries:report.entries.slice(Math.max(0,first-1),last+2)};
   }
   cancel(id){if(this.active?.id===id)this.active.abort.abort(new Error('已停止解析'));return {ok:true};}
-  async close(){this.closed=true;const active=this.active;active?.abort.abort(new Error('插件已卸载'));await active?.pending;await this.domain.close();}
+  async close(){this.closed=true;const active=this.active,daily=this.dailyActive;active?.abort.abort(new Error('插件已卸载'));daily?.abort.abort(new Error('插件已卸载'));await Promise.all([active?.pending,daily?.pending]);await this.domain.close();}
 }

@@ -1,7 +1,78 @@
 import assert from 'node:assert/strict';
-import { createRuntime } from './dsh-runtime.mjs';
+import { createRuntime,delay } from './dsh-runtime.mjs';
 import { verifyStorageUpgrade } from './storage-upgrade.mjs';
 await verifyStorageUpgrade();
+
+async function verifyDaySummaries(runtime,pluginBuild){
+  const fixture=(action,params={})=>runtime.api(action,params,'journal-test');
+  const read=scope=>runtime.api('daySummary',scope);
+  const start=scope=>runtime.api('generateDaySummary',scope);
+  async function settled(scope,id){
+    const deadline=Date.now()+10000;
+    do{
+      const view=await read(scope);
+      assert.equal(view.run?.id,id,'polling a date must return its own job');
+      if(view.run.status!=='running')return view;
+      await delay(50);
+    }while(Date.now()<deadline);
+    throw Error(`day summary did not settle: ${scope.date} ${scope.timeZone}`);
+  }
+  const utc={date:'2025-07-02',timeZone:'UTC',includeArchived:false};
+  const yesterday={...utc,date:'2025-07-01'},empty={...utc,date:'2025-07-03'};
+  const shanghai={...utc,timeZone:'Asia/Shanghai'},archived={...utc,includeArchived:true};
+  const allShanghai={...shanghai,includeArchived:true};
+  await fixture('seed-day');
+  const before=(await fixture('status')).calls;
+  for(const [scope,sessionCount,humanCount] of [[utc,2,2],[yesterday,1,1],[empty,0,0],[shanghai,2,3],[archived,3,3],[allShanghai,3,4]]){
+    const view=await read(scope);
+    assert.deepEqual(view.scope,scope);assert.deepEqual(view.coverage,{sessionCount,humanCount});
+    assert.equal(view.summary,null);assert.equal(view.run,null);assert.equal(view.canGenerate,humanCount>0);
+  }
+  assert.equal((await fixture('status')).calls,before,'browsing dates, time zones and archive scopes must never generate a summary');
+
+  await fixture('hold',{value:true});
+  const job=await start(utc);
+  assert.equal(job.mode,'day-summary');assert.equal((await read(utc)).run.status,'running');
+  assert.equal((await read(yesterday)).run,null,'a running job belongs only to its date');
+  await fixture('hold',{value:false});
+  const first=await settled(utc,job.id);
+  assert.equal(first.run.status,'completed',JSON.stringify(first.run));assert.equal(first.run.modelCalls,1);
+  assert.equal(first.stale,false);assert.equal(first.summary.humanCount,2);assert.equal(first.summary.sessionCount,2);
+  assert.equal(first.summary.text,'当天包含 2 次人的表达。\n接口检查仍未完成，执行结果尚未确认。');
+  assert.deepEqual(first.summary.sources.map(s=>[s.sessionId,s.humanSeqs]),[['journal-day-a',[4]],['journal-day-b',[2]]]);
+  assert.equal(new Set(first.summary.sources.map(s=>s.workspaceId)).size,2,'both native workspaces must contribute, even with identical titles');
+  for(const other of [yesterday,shanghai,archived])assert.equal((await read(other)).summary,null,'a saved summary must not appear in another scope');
+  const status=await fixture('status');assert.equal(status.calls,before+1);
+  const requestHumans=input=>input.sessions.map(s=>[s.sessionId,s.humans.map(h=>h.text)]);
+  assert.deepEqual(requestHumans(status.dayInputs.at(-1)),[['journal-day-a',['午夜后：补充上下文。']],['journal-day-b',['接口检查仍未完成。']]]);
+
+  const all=await settled(allShanghai,(await start(allShanghai)).id);
+  assert.equal(all.run.status,'completed',JSON.stringify(all.run));assert.equal(all.summary.humanCount,4);
+  assert.deepEqual(requestHumans((await fixture('status')).dayInputs.at(-1)),[
+    ['journal-day-a',['午夜前：先确认目标。','午夜后：补充上下文。']],['journal-day-b',['接口检查仍未完成。']],['journal-day-archived',['归档事项：这次尝试失败。']],
+  ]);
+  assert.deepEqual((await read(utc)).summary,first.summary);
+
+  await fixture('append-day');
+  const stale=await read(utc);assert.equal(stale.stale,true);assert.equal(stale.coverage.humanCount,3);assert.deepEqual(stale.summary,first.summary);
+  assert.equal((await fixture('status')).calls,before+2,'appending a message may mark a summary stale but must not regenerate it');
+  await fixture('fail',{value:true});
+  const failed=await settled(utc,(await start(utc)).id);
+  assert.equal(failed.run.status,'failed');assert.equal(failed.stale,true);assert.deepEqual(failed.summary,first.summary);
+  assert.ok(failed.run.error);assert.ok(failed.run.diagnostic.stage);assert.equal(failed.run.diagnostic.modelCalls,1);assert.deepEqual(failed.run.diagnostic.pluginBuild,pluginBuild);
+  await fixture('fail',{value:false});
+  const updated=await settled(utc,(await start(utc)).id);
+  assert.equal(updated.run.status,'completed',JSON.stringify(updated.run));assert.equal(updated.stale,false);
+  assert.equal(updated.summary.humanCount,3);assert.notEqual(updated.summary.sourceFingerprint,first.summary.sourceFingerprint);
+  assert.deepEqual(requestHumans((await fixture('status')).dayInputs.at(-1)),[['journal-day-a',['午夜后：补充上下文。','追加反馈：验证失败，先暂停。']],['journal-day-b',['接口检查仍未完成。']]]);
+
+  await runtime.stop();await runtime.start();
+  const cold=await read(utc),coldArchived=await read(allShanghai);
+  assert.deepEqual(cold.summary,updated.summary);assert.equal(cold.stale,false);
+  assert.deepEqual(coldArchived.summary,all.summary);assert.equal(coldArchived.stale,true);
+  assert.equal((await fixture('status')).calls,0,'restoring saved date summaries must not invoke the model');
+}
+
 const runtime=await createRuntime();
 try{
   await runtime.start();
@@ -129,5 +200,6 @@ try{
   const hiddenDays=await runtime.api('days',{timeZone:'UTC'}),allDays=await runtime.api('days',{timeZone:'UTC',includeArchived:true});
   assert.deepEqual(hiddenDays.totals,{sessionCount:7,humanCount:9,archivedSessionCount:7,hiddenArchivedSessionCount:7});
   assert.deepEqual(allDays.totals,{sessionCount:14,humanCount:16,archivedSessionCount:7,hiddenArchivedSessionCount:0});
-  console.log(`DSH ${runtime.runtimeVersion}: native workspace/session/LLM/storage, dates from human event times, model-free browsing, intervention result schema and frozen citations, append reuse, failed rerun preservation, cold restart, before/after pagination, stale revisions, full trajectory regression and authentication passed (deterministic adapter, not semantic model acceptance).`);
+  await verifyDaySummaries(runtime,catalogue.pluginBuild);
+  console.log(`DSH ${runtime.runtimeVersion}: native workspace/session/LLM/storage, dates from human event times, model-free browsing, scoped day summary generation/refresh/persistence, intervention result schema and frozen citations, append reuse, failed rerun preservation, cold restart, before/after pagination, stale revisions, full trajectory regression and authentication passed (deterministic adapter, not semantic model acceptance).`);
 }catch(error){console.error(runtime.log);throw error;}finally{await runtime.stop();}

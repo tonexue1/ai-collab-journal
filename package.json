@@ -1,6 +1,6 @@
 {
   "name": "dsh-collab-journal",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DSH 原生协作观察插件：按交互日期回看人的介入、分类与前文依据。",
   "type": "module",
   "main": "lib/index.js",

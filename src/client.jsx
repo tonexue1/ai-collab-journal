@@ -3,6 +3,9 @@ import css from './style.css';
 import { pluginBuild } from './build-info.mjs';
 import { syncCatalogDetail } from './catalog-sync.mjs';
 import { pollReader } from './reader-poll.mjs';
+import { DayNavigation, DaySummary } from './day-header.jsx';
+import { filterDayGroups, todayInZone } from './day-navigation.mjs';
+import { createInteractionChangeObserver } from './day-summary-reader.mjs';
 
 export async function request(action,params={},signal){
   const response=await fetch('api/dsh-collab-journal',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,...params}),signal});
@@ -130,6 +133,9 @@ function Timeline({id,report}){
 }
 export function JournalPage(){
   const [timeZone]=useState(()=>Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [today,setToday]=useState(()=>todayInZone(timeZone)),[selectedDay,setSelectedDay]=useState(()=>todayInZone(timeZone));
+  const [summaryRevision, setSummaryRevision] = useState(0);
+  const [interactionChanges] = useState(createInteractionChangeObserver);
   const [catalog,setCatalog]=useState(null),[workspace,setWorkspace]=useState(''),[query,setQuery]=useState(''),[archived,setArchived]=useState(false),[navigation,setNavigation]=useState('days'),[selected,setSelected]=useState(null);
   const [dayState,setDayState]=useState(null),[storedDetail,setDetail]=useState(null),[storedInteractions,setInteractions]=useState(null),[activeRun,setActiveRun]=useState(null);
   const [error,setError]=useState(''),[interactionError,setInteractionError]=useState(''),[loading,setLoading]=useState(true),[starting,setStarting]=useState(false),[revision,setRevision]=useState(0),[view,setView]=useState('expressions');
@@ -137,7 +143,7 @@ export function JournalPage(){
   const daysKey=JSON.stringify([workspace,archived,revision]),days=dayState?.key===daysKey?dayState.value:null;
   const all=catalog?.workspaces.flatMap(w=>w.sessions)||[],group=catalog?.workspaces.find(w=>w.id===workspace),workspaceSessions=workspace?group?.sessions||[]:all;
   const matching=s=>s.title.toLowerCase().includes(query.toLowerCase());
-  const visibleDays=(days?.days||[]).map(day=>({...day,sessions:day.sessions.filter(matching)})).filter(day=>day.sessions.length);
+  const visibleDays=filterDayGroups(days?.days||[],selectedDay,query);
   const catalogSessions=workspaceSessions.filter(s=>(archived||!s.archived)&&matching(s));
   const candidates=navigation==='days'?visibleDays.flatMap(day=>day.sessions.map(session=>({...session,date:day.date}))):catalogSessions.map(session=>({...session,date:null}));
   const session=candidates.find(s=>s.id===selected?.id&&s.date===selected?.date)||candidates[0],id=session?.id||'',date=session?.date??null;
@@ -145,20 +151,22 @@ export function JournalPage(){
   const fullRun=detail?.run?.mode==='interactions'?null:detail?.run,analysisRun=interactions?.analysisRun;
   const active=activeRun?.status==='running'?activeRun:null,running=starting||!!active,fullRunning=starting==='parse'||fullRun?.status==='running',analysisRunning=starting==='analyze'||analysisRun?.status==='running';
   const buildMismatch=catalog&&catalog.pluginBuild?.id!==pluginBuild.id;
-  const receiveRun=useCallback(run=>{
+  const receiveRun=useCallback((run,fromAction=false)=>{
     if(!run)return;
+    if (interactionChanges(run, fromAction)) setSummaryRevision(value => value + 1);
     setActiveRun(current=>{
       if(current?.id===run.id&&current.startedAt>run.startedAt)return current;
       return run.status==='running'?run:current?.id===run.id?null:current;
     });
-  },[]);
+  },[interactionChanges]);
   const receiveDetail=useCallback(data=>{setDetail(data);setCatalog(current=>syncCatalogDetail(current,data));receiveRun(data.run);},[receiveRun]);
   const refresh=useCallback(async()=>{
     const version=++catalogVersion.current;setLoading(true);setError('');
-    try{const data=await request('catalog');if(version!==catalogVersion.current)return;setCatalog(data);setActiveRun(data.activeRun);setRevision(r=>r+1);}
+    try{const data=await request('catalog');if(version!==catalogVersion.current)return;setCatalog(data);interactionChanges(data.activeRun);setActiveRun(data.activeRun);setRevision(r=>r+1);}
     catch(e){if(version===catalogVersion.current)setError(e.message);}finally{if(version===catalogVersion.current)setLoading(false);}
-  },[]);
+  },[interactionChanges]);
   useEffect(()=>{void refresh();return()=>{catalogVersion.current++;selection.current++;};},[refresh]);
+  useEffect(()=>{const timer=setInterval(()=>setToday(todayInZone(timeZone)),60000);return()=>clearInterval(timer);},[timeZone]);
   useEffect(()=>{
     const controller=new AbortController();setDayState(null);
     request('days',{timeZone,includeArchived:archived,...workspace?{workspaceId:workspace}:{}},controller.signal).then(value=>{if(!controller.signal.aborted)setDayState({key:daysKey,value});}).catch(e=>{if(!controller.signal.aborted)setDayState({key:daysKey,error:e.message});});
@@ -196,7 +204,7 @@ export function JournalPage(){
   async function act(action,extra={}){
     const version=selection.current;setStarting(action==='parse'?'parse':'analyze');setError('');
     try{
-      const run=await request(action,{id,...action==='analyzeInteractions'?{timeZone,...date?{date}:{}}:{},...extra});receiveRun(run);
+      const run=await request(action,{id,...action==='analyzeInteractions'?{timeZone,...date?{date}:{}}:{},...extra});receiveRun(run,true);
       if(version!==selection.current)return;
       if(action==='parse')setDetail(current=>({...current,id,run}));
       else{const readVersion=++readerRequest.current,value=await request('interactions',{id,timeZone,...date?{date}:{}});if(version===selection.current&&readVersion===readerRequest.current){setInteractions({key:scopeKey,value});receiveRun(value.analysisRun);}}
@@ -206,12 +214,17 @@ export function JournalPage(){
   const analyze=(interactionId,force=false)=>act('analyzeInteractions',{...interactionId?{interactionId}:{},force});
   const allAnalyzed=!!interactions?.items.length&&interactions.items.every(item=>item.analysis&&!item.analysis.stale);
   const fullNotice=fullRunning?'完整轨迹正在解析':fullRun?.status==='failed'?'完整轨迹解析未完成':fullRun?.status==='cancelled'?'完整轨迹已暂停':detail?.checkpoint?'完整轨迹有已保存的解析进度':null;
-  const archivedCount=navigation==='days'?days?.totals?.archivedSessionCount||0:workspaceSessions.filter(s=>s.archived).length;
+  const archivedCount=navigation==='days'?days?.archivedByDate?.[selectedDay]||0:workspaceSessions.filter(s=>s.archived).length;
   const visibleSessionCount=new Set(candidates.map(s=>s.id)).size;
+  function selectDay(value){setSelectedDay(value);setNavigation('days');setSelected(null);}
   return <main className="cj-root" data-testid="journal"><div className="cj-page">
     <header className="cj-heading"><div><div className="cj-eyebrow">DSH · COLLABORATION JOURNAL</div><h1>协作观察 <span>看清自己的表达与介入</span></h1><p>按日期回看：此前发生了什么，我又补上了什么。</p></div><button onClick={refresh} disabled={loading}>{loading?'读取中…':'刷新会话'}</button></header>
     <details className="cj-build"><summary>版本信息</summary><p>界面 {pluginBuild.version} / {pluginBuild.id}</p><p>后台 {catalog?.pluginBuild?`${catalog.pluginBuild.version} / ${catalog.pluginBuild.id}`:'未提供构建标识'}</p></details>
     {buildMismatch&&<p className="cj-notice" role="alert">界面与后台构建不一致。请完全退出 DSH（包括托盘）并重启，再核对版本信息。</p>}
+    <div className="cj-daily-header">
+      <DayNavigation date={selectedDay} today={today} onChange={selectDay} availableDates={(days?.days||[]).map(day=>day.date)}/>
+      <DaySummary key={JSON.stringify([selectedDay,timeZone,archived])} date={selectedDay} timeZone={timeZone} includeArchived={archived} revision={revision + summaryRevision} request={request}/>
+    </div>
     <div className="cj-workspace-filter"><span>工作区</span><div className="cj-workspaces" aria-label="选择 workspace"><button onClick={()=>{setWorkspace('');setQuery('');}} aria-pressed={!workspace}>全部工作区</button>{catalog?.workspaces.map(w=><button key={w.id} onClick={()=>{setWorkspace(w.id);setQuery('');}} aria-pressed={workspace===w.id} title={w.path}><span className="cj-folder" aria-hidden="true">▱</span>{w.title}</button>)}</div></div>
     {error&&<div className="cj-alert" role="alert">{error}<button onClick={refresh}>刷新重试</button></div>}
     {active&&active.id!==id&&<div className="cj-task-notice" role="status"><span>其他会话正在{active.mode==='interactions'?'整理交互':'解析完整轨迹'}，可继续阅读。</span><button className="cj-link" onClick={cancel}>暂停任务</button></div>}

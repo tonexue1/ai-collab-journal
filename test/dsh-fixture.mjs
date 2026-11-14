@@ -10,6 +10,7 @@ export const inject=['llm','sessions','sessionPersistence','sessionQuery','works
 export async function apply(ctx){
   let fail=false,calls=0,seenTail=false,malformed=0,repairs=0,missingEnvelope=0,envelopesEmitted=0;
   let held=null,release,failAfter=0,failGate,releaseFailure,malformedTarget;
+  const dayInputs=[];
   class Adapter extends LlmAdapter {
     async *stream(options){
       if(options.purpose!=='collab-journal')throw Error('unexpected purpose');
@@ -23,8 +24,16 @@ export async function apply(ctx){
         throw Error('fixture model failure');
       }
       const text=options.messages[0].content[0].text;
-      const {items,anchor,evidence,correction}=JSON.parse(text);
+      const input=JSON.parse(text),{items,anchor,evidence,correction}=input;
       if(correction)repairs++;
+      if(input.kind==='day-summary'){
+        // Capture the real plugin request at its external LLM boundary. These
+        // synthetic replies check transport/storage only, not semantic quality.
+        dayInputs.push(input);
+        const humanCount=input.sessions.reduce((count,session)=>count+session.humans.length,0);
+        yield {type:'text-delta',index:0,text:JSON.stringify({items:[{id:'day',summary:`当天包含 ${humanCount} 次人的表达。`,details:['接口检查仍未完成，执行结果尚未确认。']}]})};
+        yield {type:'finish',reason:{kind:'stop'}};return;
+      }
       if(anchor){
         // This branch verifies native model/storage/citation wiring only. It
         // deliberately labels known synthetic fixtures, not real conversations.
@@ -56,6 +65,34 @@ export async function apply(ctx){
   async function persist(session){
     const writer=await ctx.sessionPersistence.create(session.header,{inheritedEventCount:session.inheritedEventCount});
     try{await writer.append(session.snapshotEvents());}finally{await writer.close();}
+  }
+  async function seedDaySessions(){
+    const roots=['day-a','day-b'].map(name=>join(process.env.DSH_HOME,'projects',name));
+    for(const root of roots)await mkdir(root,{recursive:true});
+    const workspaces=await Promise.all(roots.map(root=>ctx.workspaceRegistry.create(root,'当日总结 workspace')));
+    const fixtures=[
+      {id:'journal-day-a',workspace:0,title:'跨日安排',humans:[['2025-07-01T23:30:00Z','午夜前：先确认目标。'],['2025-07-02T00:30:00Z','午夜后：补充上下文。']]},
+      {id:'journal-day-b',workspace:1,title:'接口检查',humans:[['2025-07-02T01:00:00Z','接口检查仍未完成。']]},
+      {id:'journal-day-archived',workspace:0,title:'归档事项',archived:true,humans:[['2025-07-02T01:30:00Z','归档事项：这次尝试失败。']]},
+    ];
+    for(const fixture of fixtures){
+      const seed=[],firstTime=Date.parse(fixture.humans[0][0]);
+      const add=(type,data,time,surface=false)=>seed.push({type,seq:seed.length,time,data,...surface?{surfaceOp:'append'}:{}});
+      add('turn/start',{turn:1},firstTime);add('step/start',{turn:1,step:1},firstTime);
+      for(const [iso,text] of fixture.humans){
+        const time=Date.parse(iso);
+        add('user/message',createUserMessage({content:[{type:'text',text}],source:{kind:'user'}}),time,true);
+        add('assistant/message',{turn:1,step:1,stream:[],message:createAssistantMessage({content:[{type:'text',text:'AI 后续计划不是当日人的表达。'}],source:{provider:'journal-fixture',model:'fixture'}})},time+1,true);
+      }
+      const lastTime=seed.at(-1).time+1;
+      add('step/end',{turn:1,step:1},lastTime);add('turn/end',{turn:1,reason:{kind:'completed'}},lastTime);
+      add('session/title',{title:fixture.title,messageSeqs:[],source:{kind:'user'}},lastTime);
+      // Native replay validates the full history, then native persistence stores
+      // it. Keep these sessions cold so neither dates nor restart need clock mocks.
+      const session=ctx.sessions.prepare(fixture.id,{seed,meta:{cwd:roots[fixture.workspace],createdAt:Date.parse('2025-06-01T00:00:00Z')}});
+      await persist(session);await workspaces[fixture.workspace].attachSession(session.id);
+      if(fixture.archived)await ctx.workspaceRegistry.archiveSession(session.id);
+    }
   }
   let primary=ctx.sessions.get('journal-test-a');
   if(!existing.has('journal-test-a')){
@@ -107,11 +144,18 @@ export async function apply(ctx){
         if(i>=5)await ctx.workspaceRegistry.archiveSession(id);
       }
     }
+    if(body.action==='seed-day')await seedDaySessions();
+    if(body.action==='append-day'){
+      const id='journal-day-a',log=await ctx.sessionQuery.readSession(id);
+      const event={type:'user/message',seq:log.events.length,time:Date.parse('2025-07-02T02:00:00Z'),data:createUserMessage({content:[{type:'text',text:'追加反馈：验证失败，先暂停。'}],source:{kind:'user'}}),surfaceOp:'append'};
+      ctx.sessions.prepare(id,{seed:[...log.events,event],meta:log.session});
+      const writer=await ctx.sessionPersistence.open(id,'write');try{await writer.append([event]);}finally{await writer.close();}
+    }
     if(body.action==='append'){
       const event=primary.append('user/message',createUserMessage({content:[{type:'text',text:'今天继续：检查测试结果。'}],source:{kind:'user'}}),{surfaceOp:'append'});
       const writer=await ctx.sessionPersistence.open(primary.id,'write');try{await writer.append([event]);}finally{await writer.close();}
     }
-    return Response.json({ready:true,calls,seenTail,repairs,envelopesEmitted,live:!!ctx.sessions.get('journal-test-a')});
+    return Response.json({ready:true,calls,seenTail,repairs,envelopesEmitted,dayInputs,live:!!ctx.sessions.get('journal-test-a')});
     }catch(error){return Response.json({ok:false,error:error.stack},{status:500});}
   }}));
 }
