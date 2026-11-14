@@ -1,6 +1,6 @@
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm';
 import { SYSTEM } from './trajectory.mjs';
-export function modelGenerator(llm,route,sessionId) {
+export function modelGenerator(llm,route,sessionId,{system=SYSTEM}={}) {
   return async (input,signal) => {
     const deadline=AbortSignal.any([signal,AbortSignal.timeout(90000)]);
     // Four bounded Chinese summaries plus details can exceed 2600 tokens.
@@ -10,7 +10,7 @@ export function modelGenerator(llm,route,sessionId) {
       ...(model.reasoning?.efforts[0]?{reasoningEffort:model.reasoning.efforts[0].id}:{}),
     }));
     const assembler=new BlockAssembler();
-    const options={...call.config,system:SYSTEM,messages:[createUserMessage({content:[{type:'text',text:JSON.stringify(input)}],source:{kind:'dsh-collab-journal'}})],sessionId,purpose:'collab-journal',signal:deadline};
+    const options={...call.config,system,messages:[createUserMessage({content:[{type:'text',text:JSON.stringify(input)}],source:{kind:'dsh-collab-journal'}})],sessionId,purpose:'collab-journal',signal:deadline};
     for await(const chunk of call.stream(options)){deadline.throwIfAborted();assembler.push(chunk);}
     deadline.throwIfAborted();
     if(assembler.finish.kind!=='stop')throw new Error(assembler.finish.failure?.message||`解析模型未正常完成：${assembler.finish.kind}`);

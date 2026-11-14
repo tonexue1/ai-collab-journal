@@ -27,6 +27,11 @@ export async function verifyStorageUpgrade(spec=journalSpec) {
   const checkpoint={sessionId:'legacy-session',jobId:'checkpoint-job',snapshotId:'legacy-fingerprint',
     route:{provider:'fixture',model:'old-model'},analysisVersion:'test-version',updatedAt:200,
     cache:{'completed-batch':[{id:'n1.1.0',summary:'已保存的分片摘要',details:['仍可继续解析']} ]}};
+  const sourceKey='legacy-session.source-fingerprint';
+  const source={sessionId:'legacy-session',snapshotId:'source-fingerprint',entries:report.entries};
+  const result={resultId:'result-one',sessionId:'legacy-session',interactionId:'h1',humanSeq:1,sourceSnapshotId:'source-fingerprint',basisHash:'basis-one',analysisVersion:'intervention-test',generatedAt:300,route:report.route,
+    result:{title:'补充工作要求',categories:[{label:'新任务',evidence:[{seq:1,quote:'原有原文'}]}],before:{text:'没有可见前文',evidence:[]},contribution:{text:'提出原有表达',evidence:[{seq:1,quote:'原有原文'}]},certainty:'unclear'},
+    readEvidence:[{seq:1,offset:0,totalChars:4,text:'原有原文'}],coverage:{readChars:4,totalChars:4,readEntries:1,totalEntries:1,complete:true,rounds:1,budgetExhausted:false,ranges:[{seq:1,start:0,end:4,totalChars:4}]}};
   let domain,backend;
   async function open(){
     const ctx=new Context();new Storage(ctx);
@@ -42,9 +47,15 @@ export async function verifyStorageUpgrade(spec=journalSpec) {
     await open();oldDataSurvives();
     assert.equal(domain.table('checkpoints').size,0,'an old v1 document has no checkpoint table yet');
     await domain.table('checkpoints').put('legacy-session',checkpoint);
+    await domain.table('interaction_sources').put(sourceKey,source);
+    await domain.table('interaction_versions').put(result.resultId,result);
+    await domain.table('interaction_latest').put('legacy-session.h1',{resultId:result.resultId});
     await close();
     await open();oldDataSurvives();
     assert.deepEqual(domain.table('checkpoints').get('legacy-session'),checkpoint);
+    assert.deepEqual(domain.table('interaction_sources').get(sourceKey),source);
+    assert.deepEqual(domain.table('interaction_versions').get(result.resultId),result);
+    assert.deepEqual(domain.table('interaction_latest').get('legacy-session.h1'),{resultId:result.resultId});
     assert.equal(await domain.table('checkpoints').delete('legacy-session'),true);
     await close();
     await open();oldDataSurvives();
@@ -53,6 +64,7 @@ export async function verifyStorageUpgrade(spec=journalSpec) {
     assert.equal(persisted.unit.version,1);
     assert.deepEqual(persisted.tables.reports,{'legacy-session':report});
     assert.deepEqual(persisted.tables.versions,{[versionKey]:report});
-    console.log('Existing v1 reports and original snapshots survive checkpoint writes, reopen and deletion.');
+    assert.deepEqual(domain.table('interaction_versions').get(result.resultId),result);
+    console.log('Existing v1 reports and snapshots survive checkpoint and interaction-result writes, reopen and deletion.');
   } finally {await close();await rm(root,{recursive:true,force:true});}
 }

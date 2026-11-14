@@ -10,10 +10,17 @@ try{
   assert.equal(groups.length,2);assert.equal(groups[0].title,groups[1].title);assert.notEqual(groups[0].id,groups[1].id);
   assert.deepEqual(groups.flatMap(w=>w.sessions.map(s=>s.id)).sort(),['journal-test-a','journal-test-b']);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
+  const initialDays=await runtime.api('days',{timeZone:'UTC'});
+  assert.equal(initialDays.timeZone,'UTC');assert.equal(initialDays.totals.humanCount,3);assert.equal(initialDays.totals.sessionCount,2);assert.deepEqual(initialDays.errors,[]);
   const initialInteractions=await runtime.api('interactions',{id:'journal-test-a'});
   assert.equal(initialInteractions.items.length,2);assert.match(initialInteractions.revision,/^[a-f0-9]{64}$/);
   assert.deepEqual(initialInteractions.items.map(item=>item.human.text),['流量购买的 H5 跳转方式应该收敛。','不是只改安卓，鸿蒙也要统一；先比较缺失的 API。']);
   const firstInteraction=initialInteractions.items[0],secondInteraction=initialInteractions.items[1];
+  for(const human of initialInteractions.items.map(i=>i.human)){
+    const day=new Date(human.time).toISOString().slice(0,10);
+    assert.ok(initialDays.days.find(d=>d.date===day)?.sessions.some(s=>s.id==='journal-test-a'),'day attribution uses each actual human event time, not session creation');
+  }
+  assert.ok(initialInteractions.items.every(i=>i.analysis===null));
   const contextArgs={id:'journal-test-a',interactionId:secondInteraction.id,revision:initialInteractions.revision};
   const initialBefore=await runtime.api('interactionContext',{...contextArgs,side:'before',limit:100});
   assert.deepEqual(initialBefore.highlight,[secondInteraction.human.seq]);assert.equal(initialBefore.entries.at(-1).seq,secondInteraction.human.seq);
@@ -36,6 +43,23 @@ try{
   const firstBefore=await runtime.api('interactionContext',{id:'journal-test-a',interactionId:firstInteraction.id,revision:initialInteractions.revision,side:'before'});
   assert.deepEqual(firstBefore.entries.map(e=>e.seq),[firstInteraction.human.seq]);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0,'interaction index and original context reads must not call the model');
+  await runtime.api('hold',{value:true},'journal-test');
+  await runtime.api('analyzeInteractions',{id:'journal-test-a'});
+  assert.equal((await runtime.api('interactions',{id:'journal-test-a'})).analysisRun.status,'running');
+  await runtime.api('hold',{value:false},'journal-test');
+  const analyzedRun=(await runtime.settled('journal-test-a')).run;
+  assert.equal(analyzedRun.mode,'interactions');assert.equal(analyzedRun.status,'completed',JSON.stringify(analyzedRun));assert.equal(analyzedRun.completed,2);assert.equal(analyzedRun.modelCalls,2);
+  const classified=await runtime.api('interactions',{id:'journal-test-a'}),classification=classified.items[1].analysis;
+  assert.equal(classified.items[0].analysis.result.categories[0].label,'新任务');
+  assert.equal(classification.result.categories[0].label,'方向纠正');assert.equal(classification.stale,false);
+  assert.equal(classification.result.contribution.evidence[0].seq,secondInteraction.human.seq);
+  assert.equal(classification.result.contribution.evidence[0].quote,secondInteraction.human.text);
+  const frozenEvidence=await runtime.api('interactionEvidence',{id:'journal-test-a',resultId:classification.resultId});
+  assert.ok(frozenEvidence.entries.some(e=>e.seq===secondInteraction.human.seq));assert.ok(frozenEvidence.entries.every(e=>e.seq<=secondInteraction.human.seq));
+  assert.ok(!JSON.stringify(frozenEvidence).includes('FUTURE_RESULT_AFTER_INTERVENTION'));
+  assert.equal(frozenEvidence.entries.find(e=>e.seq===pendingCall.seq).provenance?.resultSeqs,undefined);
+  for(const read of frozenEvidence.readEvidence){const original=frozenEvidence.entries.find(e=>e.seq===read.seq);assert.ok(original);assert.equal(read.text,original.text.slice(read.offset,read.offset+read.text.length));assert.equal(read.totalChars,original.text.length);}
+  assert.ok(frozenEvidence.coverage.readChars<=24000);
   await runtime.api('malformed',{value:1},'journal-test');
   await runtime.api('missing-envelope',{value:1},'journal-test');
   await runtime.api('hold',{value:true},'journal-test');
@@ -63,6 +87,16 @@ try{
   assert.deepEqual(appendedInteractions.items.slice(0,2).map(item=>item.id),initialInteractions.items.map(item=>item.id));
   const appendedBefore=await runtime.api('interactionContext',{...contextArgs,revision:appendedInteractions.revision,side:'before',limit:100});
   assert.deepEqual(appendedBefore.entries,initialBefore.entries,'append must not rewrite the original before evidence');
+  assert.equal(appendedInteractions.items[1].basisHash,classified.items[1].basisHash);assert.equal(appendedInteractions.items[1].analysis.stale,false);assert.equal(appendedInteractions.items[1].analysis.resultId,classification.resultId);assert.equal(appendedInteractions.items[2].analysis,null);
+  const callsBeforeSkip=(await runtime.api('status',{},'journal-test')).calls;
+  await runtime.api('analyzeInteractions',{id:'journal-test-a',interactionId:secondInteraction.id});
+  const skipped=(await runtime.settled('journal-test-a')).run;assert.equal(skipped.status,'completed');assert.equal(skipped.total,0);assert.equal(skipped.modelCalls,0);
+  assert.equal((await runtime.api('status',{},'journal-test')).calls,callsBeforeSkip);
+  await runtime.api('fail',{value:true},'journal-test');
+  await runtime.api('analyzeInteractions',{id:'journal-test-a',interactionId:secondInteraction.id,force:true});
+  const failedAnalysis=(await runtime.settled('journal-test-a')).run;assert.equal(failedAnalysis.status,'failed');assert.equal(failedAnalysis.errors[0].interactionId,secondInteraction.id);
+  assert.equal((await runtime.api('interactions',{id:'journal-test-a'})).items[1].analysis.resultId,classification.resultId);
+  assert.deepEqual(await runtime.api('interactionEvidence',{id:'journal-test-a',resultId:classification.resultId}),frozenEvidence);
   await runtime.api('fail',{value:true},'journal-test');await runtime.api('parse',{id:'journal-test-a'});detail=await runtime.settled('journal-test-a');
   assert.equal(detail.run.status,'failed');assert.equal(detail.report.snapshotId,snapshotId);
   const unauth=await fetch(`${runtime.base}/api/dsh-collab-journal`,{method:'POST',headers:{'content-type':'application/json'},body:'{"action":"catalog"}'});assert.ok([401,403].includes(unauth.status));
@@ -70,6 +104,9 @@ try{
   assert.equal((await runtime.api('status',{},'journal-test')).live,false,'reads must support cold persisted sessions');
   const coldInteractions=await runtime.api('interactions',{id:'journal-test-a'});assert.deepEqual(coldInteractions,appendedInteractions);
   const coldBefore=await runtime.api('interactionContext',{...contextArgs,revision:coldInteractions.revision,side:'before',limit:100});assert.deepEqual(coldBefore,appendedBefore);
+  assert.equal(coldInteractions.items[1].analysis.resultId,classification.resultId);assert.equal(coldInteractions.items[1].analysis.result.categories[0].label,'方向纠正');
+  assert.deepEqual(await runtime.api('interactionEvidence',{id:'journal-test-a',resultId:classification.resultId}),frozenEvidence);
+  const coldDays=await runtime.api('days',{timeZone:'UTC'});assert.deepEqual(coldDays.errors,[]);assert.equal(coldDays.totals.humanCount,4);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0,'cold interaction reads must not call the model');
   detail=await runtime.api('detail',{id:'journal-test-a'});assert.equal(detail.report.snapshotId,snapshotId);assert.equal(detail.report.stale,true);
   await runtime.api('parse',{id:'journal-test-a'});detail=await runtime.settled('journal-test-a');assert.equal(detail.run.status,'completed');assert.equal(detail.report.nodes.filter(n=>n.role==='user').length,3);
@@ -89,5 +126,8 @@ try{
   await runtime.api('seed-list',{},'journal-test');
   const ungrouped=(await runtime.api('catalog')).workspaces.find(w=>w.id==='__ungrouped__');
   assert.equal(ungrouped.sessions.length,12);assert.equal(ungrouped.sessions.filter(s=>s.archived).length,7);
-  console.log(`DSH ${runtime.runtimeVersion}: package install without exemptions, native workspace/session/LLM/storage, cold restart, model-free human interactions, before/after provenance and pagination, stale revision protection, build identity, format repair, failed rerun, immutable context and authentication passed.`);
+  const hiddenDays=await runtime.api('days',{timeZone:'UTC'}),allDays=await runtime.api('days',{timeZone:'UTC',includeArchived:true});
+  assert.deepEqual(hiddenDays.totals,{sessionCount:7,humanCount:9,archivedSessionCount:7,hiddenArchivedSessionCount:7});
+  assert.deepEqual(allDays.totals,{sessionCount:14,humanCount:16,archivedSessionCount:7,hiddenArchivedSessionCount:0});
+  console.log(`DSH ${runtime.runtimeVersion}: native workspace/session/LLM/storage, dates from human event times, model-free browsing, intervention result schema and frozen citations, append reuse, failed rerun preservation, cold restart, before/after pagination, stale revisions, full trajectory regression and authentication passed (deterministic adapter, not semantic model acceptance).`);
 }catch(error){console.error(runtime.log);throw error;}finally{await runtime.stop();}

@@ -10,11 +10,14 @@ export async function apply(ctx){
       const text=await request.text();if(text.length>4096)throw new JournalError('请求过大',413);
       let body;try {body=JSON.parse(text);}catch{throw new JournalError('无效 JSON');}
       if(!body||typeof body!=='object')throw new JournalError('无效请求');
-      if(body.action!=='catalog'&&(typeof body.id!=='string'||!body.id||body.id.length>200))throw new JournalError('缺少会话标识');
+      if(!['catalog','days'].includes(body.action)&&(typeof body.id!=='string'||!body.id||body.id.length>200))throw new JournalError('缺少会话标识');
       let value;
       if(body.action==='catalog')value=await journal.catalog();
+      else if(body.action==='days')value=await journal.days(body);
       else if(body.action==='detail')value=await journal.detail(body.id);
-      else if(body.action==='interactions')value=await journal.interactions(body.id);
+      else if(body.action==='interactions')value=await journal.interactions(body.id,body);
+      else if(body.action==='analyzeInteractions')value=await journal.startInteractions(body.id,body);
+      else if(body.action==='interactionEvidence')value=await journal.interactionEvidence(body.id,body.resultId,body.seq);
       else if(body.action==='interactionContext')value=await journal.interactionContext(body.id,body.interactionId,body.revision,body.side,body.offset,body.limit);
       else if(body.action==='parse')value=await journal.start(body.id);
       else if(body.action==='cancel')value=journal.cancel(body.id);

@@ -22,9 +22,21 @@ export async function apply(ctx){
         finally{options.signal.removeEventListener('abort',abort);}
         throw Error('fixture model failure');
       }
-      const text=options.messages[0].content[0].text;seenTail ||= text.includes('TAIL_EVIDENCE');
-      const {items,correction}=JSON.parse(text);
+      const text=options.messages[0].content[0].text;
+      const {items,anchor,evidence,correction}=JSON.parse(text);
       if(correction)repairs++;
+      if(anchor){
+        // This branch verifies native model/storage/citation wiring only. It
+        // deliberately labels known synthetic fixtures, not real conversations.
+        const correcting=anchor.text.startsWith('不是只改安卓'),quote={seq:anchor.seq,quote:anchor.text.slice(0,1000)};
+        const preceding=evidence.findLast(e=>e.type==='assistant/message'&&!e.provenance?.replaces);
+        const output={title:correcting?'纠正统一范围并安排接口对比':'提出新的任务目标',
+          categories:[{label:correcting?'方向纠正':'新任务',evidence:[quote]}],
+          before:preceding?{text:'AI 表示需要确认统一范围。',evidence:[{seq:preceding.seq,quote:preceding.text.slice(0,1000)}]}:{text:'前文证据不足，无法确定介入前状态。',evidence:[]},
+          contribution:{text:correcting?'明确安卓与鸿蒙都要统一，要求先比较缺失的接口。':'提出接下来的任务目标。',evidence:[quote]},certainty:preceding?'supported':'unclear'};
+        yield {type:'text-delta',index:0,text:JSON.stringify(output)};yield {type:'finish',reason:{kind:'stop'}};return;
+      }
+      seenTail ||= text.includes('TAIL_EVIDENCE');
       const batchKey=JSON.stringify(items.map(i=>i.id));
       if(malformed>0&&malformedTarget===undefined)malformedTarget=batchKey;
       if(malformed>0&&batchKey===malformedTarget){
@@ -67,7 +79,11 @@ export async function apply(ctx){
     addAi(primary,'已对比两端 API，鸿蒙尚缺返回结果的桥接。代码还未修改。',1);primary.append('step/end',{turn:1,step:1});primary.append('turn/end',{turn:1,reason:{kind:'completed'}});
     primary.append('session/title',{title:'统一流量购买 H5 跳转',messageSeqs:[],source:{kind:'user'}});
     await persist(primary);await workspaces[0].attachSession(primary.id);
-    const b=ctx.sessions.create('journal-test-b',{meta:{cwd:roots[1]}});addHuman(b,'检查 Android Push API。');addAi(b,'已检查安卓接口。',1);b.append('session/title',{title:'检查 Android Push API',messageSeqs:[],source:{kind:'user'}});await persist(b);await workspaces[1].attachSession(b.id);
+    const b=ctx.sessions.create('journal-test-b',{meta:{cwd:roots[1]}});
+    b.append('turn/start',{turn:1});b.append('step/start',{turn:1,step:1});
+    addHuman(b,'检查 Android Push API。');addAi(b,'已检查安卓接口。',1);
+    b.append('step/end',{turn:1,step:1});b.append('turn/end',{turn:1,reason:{kind:'completed'}});
+    b.append('session/title',{title:'检查 Android Push API',messageSeqs:[],source:{kind:'user'}});await persist(b);await workspaces[1].attachSession(b.id);
     const child=ctx.sessions.create('journal-test-child',{meta:{cwd:roots[0],origin:'subagent',parentSession:primary.id}});addHuman(child,'子代理材料');await persist(child);await workspaces[0].attachSession(child.id);
   }
   ctx.effect(()=>ctx.connection.fetch.register({path:'/api/journal-test',methods:['POST'],requestBody:'buffered',async fetch(request){

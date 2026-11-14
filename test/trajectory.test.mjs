@@ -40,7 +40,7 @@ test('catalogue respects native workspace IDs, archive and subagent classificati
   const h=harness(),result=await h.journal.catalog();assert.equal(result.workspaces.length,2);assert.deepEqual(result.workspaces[0].sessions.map(s=>s.id),['a']);assert.equal(result.workspaces[1].sessions[0].archived,true);assert.equal(h.calls(),0);
 });
 test('manual parsing, deduplication, failed rerun and immutable original evidence',async()=>{
-  const h=harness();await h.journal.start('a');const pending=h.journal.active.pending;await h.journal.start('a');await assert.rejects(h.journal.start('b'),/另一个/);await pending;
+  const h=harness();await h.journal.start('a');const pending=h.journal.active.pending;await h.journal.start('a');await assert.rejects(h.journal.start('b'),error=>error.status===409);await pending;
   const original=await h.journal.detail('a');assert.equal(original.report.nodes.length,2);assert.equal(original.run.status,'completed');
   h.logs.get('a').events.push(...events(user('new')).map(e=>({...e,seq:2,time:3000})));assert.equal((await h.journal.detail('a')).report.stale,true);
   h.setFail();await h.journal.start('a');await h.journal.active.pending;const failed=await h.journal.detail('a');assert.equal(failed.run.status,'failed');assert.equal(failed.report.snapshotId,original.report.snapshotId);

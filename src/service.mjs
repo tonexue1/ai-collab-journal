@@ -5,8 +5,17 @@ import { OutputValidationError } from './output.mjs';
 import { pluginBuild } from './build-info.mjs';
 import { indexInteractions } from './interactions.mjs';
 import { createProvenanceIndex } from './provenance.mjs';
+import { interactionCalendar } from './days.mjs';
+import { createInterventionBasis, interventionBasisHash, analyzeIntervention, INTERVENTION_SYSTEM } from './interventions.mjs';
 
 export class JournalError extends Error {constructor(message,status=400){super(message);this.status=status;}}
+function calendar(options){try{return interactionCalendar(options);}catch(error){throw new JournalError(error.message);}}
+const sessionTitle=(log,id)=>log.events.findLast(e=>e.type==='session/title')?.data.title||contentText(log.events.find(e=>e.type==='user/message'&&e.data.source?.kind==='user')?.data.content).slice(0,80)||id;
+function interventionDiagnostic(error,run,stage,modelCalls,startedAt,status){
+  return {code:error?.code||error?.name||status.toUpperCase(),status,stage,route:run.route,modelCalls,elapsedMs:Date.now()-startedAt,pluginBuild,
+    ...(error instanceof OutputValidationError?{attempts:error.attempts,issues:structuredClone(error.issues)}:{}),
+  };
+}
 export class Journal {
   constructor(ctx,domain){this.ctx=ctx;this.domain=domain;this.runs=new Map();this.active=null;this.closed=false;}
   async source(id){
@@ -46,9 +55,128 @@ export class Journal {
     const checkpoint=this.matchesCheckpoint(saved,fingerprint(log.entries),route,stored)&&Object.keys(saved.cache).length?{completedCalls:Object.keys(saved.cache).length,totalCalls:plan.totalCalls,updatedAt:saved.updatedAt}:null;
     return {id,report,route,plan,checkpoint,humanCount:log.entries.filter(e=>e.role==='user').length,run:this.runs.get(id)||null};
   }
-  async interactions(id){
+  async days({timeZone,includeArchived=false,workspaceId}={}){
+    const dates=calendar({timeZone});
+    if(typeof includeArchived!=='boolean'||workspaceId!==undefined&&(typeof workspaceId!=='string'||!workspaceId))throw new JournalError('无效的日期筛选');
+    const workspaces=this.ctx.workspaceRegistry.list(),archived=new Set(this.ctx.workspaceRegistry.archivedSessionIds);
+    const records=(await this.ctx.sessionQuery.listSessions()).filter(({header})=>header.origin!=='subagent').map(({header})=>({id:header.id,workspaceId:workspaces.find(w=>w.sessionIds.includes(header.id))?.id??'__ungrouped__',archived:archived.has(header.id)})).filter(row=>workspaceId===undefined||row.workspaceId===workspaceId);
+    const groups=new Map(),errors=[];let cursor=0,unknownTimeCount=0;
+    const totals={sessionCount:0,humanCount:0,archivedSessionCount:0,hiddenArchivedSessionCount:0};
+    await Promise.all(Array.from({length:Math.min(4,records.length)},async()=>{
+      while(cursor<records.length){
+        const row=records[cursor++];
+        try {
+          const log=await this.source(row.id),title=sessionTitle(log,row.id),perDay=new Map(),humans=log.entries.filter(e=>e.role==='user'),visible=includeArchived||!row.archived;
+          if(humans.length){
+            if(row.archived){totals.archivedSessionCount++;if(!includeArchived)totals.hiddenArchivedSessionCount++;}
+            if(visible){totals.sessionCount++;totals.humanCount+=humans.length;}
+          }
+          for(const human of humans){
+            const date=dates.day(human.time);if(date===null){if(visible)unknownTimeCount++;continue;}
+            let item=perDay.get(date);if(!item){item={...row,title,humanCount:0,firstHumanAt:human.time,lastHumanAt:human.time};perDay.set(date,item);}
+            item.humanCount++;item.firstHumanAt=Math.min(item.firstHumanAt,human.time);item.lastHumanAt=Math.max(item.lastHumanAt,human.time);
+          }
+          for(const [date,item] of perDay){if(!groups.has(date))groups.set(date,[]);groups.get(date).push(item);}
+        }catch(error){errors.push({id:row.id,error:error.message});}
+      }
+    }));
+    const days=[...groups].sort(([a],[b])=>b.localeCompare(a)).map(([date,all])=>{
+      const sessions=all.filter(row=>includeArchived||!row.archived).sort((a,b)=>b.lastHumanAt-a.lastHumanAt||a.id.localeCompare(b.id)),archivedSessionCount=all.filter(row=>row.archived).length;
+      return {date,humanCount:sessions.reduce((sum,s)=>sum+s.humanCount,0),sessionCount:sessions.length,archivedSessionCount,hiddenArchivedSessionCount:includeArchived?0:archivedSessionCount,sessions};
+    }).filter(day=>day.sessionCount>0);
+    return {timeZone:dates.timeZone,days,totals,unknownTimeCount,errors:errors.sort((a,b)=>a.id.localeCompare(b.id))};
+  }
+  async interactions(id,options={}){
+    const dates=calendar(options);
     const {entries}=await this.source(id);
-    return {id,revision:fingerprint(entries),items:indexInteractions(entries)};
+    const items=indexInteractions(entries).filter(item=>dates.date===undefined||dates.day(item.human.time)===dates.date).map(item=>{
+      const basisHash=interventionBasisHash(entries,item.id),stored=this.storedInteraction(id,item.id);
+      return {...item,basisHash,analysis:stored?{resultId:stored.resultId,basisHash:stored.basisHash,generatedAt:stored.generatedAt,result:stored.result,stale:stored.basisHash!==basisHash,route:stored.route}:null};
+    });
+    const run=this.runs.get(id);
+    return {id,revision:fingerprint(entries),timeZone:dates.timeZone,items,analysisRun:run?.mode==='interactions'?structuredClone(run):null};
+  }
+  storedInteraction(id,anchorId){
+    const latest=this.domain.table('interaction_latest').get(`${id}.${anchorId}`);
+    const result=latest?this.domain.table('interaction_versions').get(latest.resultId):null;
+    return result?.sessionId===id&&result.interactionId===anchorId?result:null;
+  }
+  async startInteractions(id,{date,timeZone,interactionId,force=false}={}){
+    if(this.closed)throw new JournalError('插件正在卸载',503);
+    const dates=calendar({date,timeZone});
+    if(typeof force!=='boolean'||interactionId!==undefined&&(typeof interactionId!=='string'||!/^h\d+$/.test(interactionId)))throw new JournalError('无效的介入整理范围');
+    const scopeKey=JSON.stringify({date:date??null,timeZone:dates.timeZone,interactionId:interactionId??null,force});
+    if(this.active){
+      if(this.active.id===id&&this.active.mode==='interactions'&&this.active.scopeKey===scopeKey)return structuredClone(this.runs.get(id));
+      throw new JournalError('已有解析任务正在处理，请稍后再试',409);
+    }
+    const abort=new AbortController(),run={id,mode:'interactions',status:'running',stage:'读取介入前原文',startedAt:Date.now(),scopeDate:date??null,total:0,completed:0,modelCalls:0,errors:[]};
+    this.runs.set(id,run);
+    let ready,failed;const prepared=new Promise((resolve,reject)=>{ready=resolve;failed=reject;});
+    const active={id,mode:'interactions',scopeKey,abort};this.active=active;
+    active.pending=this.executeInteractions(id,{dates,interactionId,force},abort,run,ready,failed);
+    return prepared;
+  }
+  async executeInteractions(id,{dates,interactionId,force},abort,run,ready,failed){
+    let prepared=false;
+    try {
+      const signal=abort.signal,log=await this.source(id);signal.throwIfAborted();
+      let items=indexInteractions(log.entries).filter(item=>dates.date===undefined||dates.day(item.human.time)===dates.date);
+      if(interactionId!==undefined){items=items.filter(item=>item.id===interactionId);if(!items.length)throw new JournalError('这条人的表达不在所选范围内',404);}
+      const targets=items.filter(item=>force||this.storedInteraction(id,item.id)?.basisHash!==interventionBasisHash(log.entries,item.id));
+      run.total=targets.length;
+      const route=routeFrom(log.events);if(targets.length&&!route)throw new JournalError('此会话没有可复用的模型；请先在 DSH 中选择模型并完成一次对话');
+      if(route)run.route=route;
+      prepared=true;ready(structuredClone(run));
+      if(targets.length){
+        const snapshotId=fingerprint(log.entries),sourceKey=`${id}.${snapshotId}`,sources=this.domain.table('interaction_sources'),stored=sources.get(sourceKey);
+        run.stage='保存共享原文快照';
+        if(stored){if(stored.sessionId!==id||stored.snapshotId!==snapshotId||fingerprint(stored.entries)!==snapshotId)throw new Error('已保存的介入原文快照不匹配');}
+        else await sources.put(sourceKey,{sessionId:id,snapshotId,entries:log.entries});
+        signal.throwIfAborted();
+        const generate=modelGenerator(this.ctx.llm,route,id,{system:INTERVENTION_SYSTEM});let cursor=0;
+        const worker=async()=>{
+          while(cursor<targets.length&&!signal.aborted){
+            const item=targets[cursor++],startedAt=Date.now();let stage='整理介入',modelCalls=0;
+            try {
+              const basis=createInterventionBasis(log.entries,item.id);
+              const output=await analyzeIntervention(generate,basis,item.id,signal,{onCall:()=>{modelCalls++;run.modelCalls++;},onStage:value=>{stage=value;run.stage=`${item.id} · ${value}`;}});
+              signal.throwIfAborted();stage='保存介入与证据';run.stage=`${item.id} · ${stage}`;
+              const result={resultId:randomUUID(),sessionId:id,interactionId:item.id,humanSeq:basis.humanSeq,sourceSnapshotId:snapshotId,basisHash:basis.basisHash,analysisVersion:basis.analysisVersion,generatedAt:Date.now(),route,...output};
+              await this.domain.table('interaction_versions').put(result.resultId,result);
+              signal.throwIfAborted();await this.domain.table('interaction_latest').put(`${id}.${item.id}`,{resultId:result.resultId});
+              run.completed++;
+            }catch(error){if(!signal.aborted){stage=error.analysisStage||stage;run.errors.push({interactionId:item.id,error:error.message,code:error.code||error.name,stage,diagnostic:interventionDiagnostic(error,run,stage,modelCalls,startedAt,'failed')});}}
+          }
+        };
+        // Each worker owns all of its accepted writes. Neither failure nor
+        // cancellation releases the active slot before both workers settle.
+        await Promise.all(Array.from({length:Math.min(2,targets.length)},worker));
+        signal.throwIfAborted();
+      }
+      run.status=run.errors.length?'failed':'completed';run.stage=run.errors.length?'部分介入整理失败；已保存其余结果':'介入整理完成';
+    }catch(error){
+      if(!prepared)failed(error);
+      run.status=abort.signal.aborted?'cancelled':'failed';run.error=error.message;
+      run.diagnostic=interventionDiagnostic(error,run,run.stage,run.modelCalls,run.startedAt,run.status);
+    }finally{
+      run.finishedAt=Date.now();
+      run.diagnostic??=interventionDiagnostic(null,run,run.stage,run.modelCalls,run.startedAt,run.status);
+      this.active=null;
+    }
+  }
+  async interactionEvidence(id,resultId,seq){
+    if(typeof resultId!=='string'||!resultId||seq!==undefined&&(!Number.isSafeInteger(seq)||seq<0))throw new JournalError('无效的介入证据标识');
+    await this.source(id);
+    const result=this.domain.table('interaction_versions').get(resultId);
+    if(!result||result.sessionId!==id)throw new JournalError('这份介入整理不存在',404);
+    const snapshot=this.domain.table('interaction_sources').get(`${id}.${result.sourceSnapshotId}`);
+    if(!snapshot||snapshot.sessionId!==id)throw new JournalError('这份介入的原文快照不存在',404);
+    const allowed=new Set([result.humanSeq,...result.readEvidence.map(item=>item.seq)]);
+    if(seq!==undefined&&!allowed.has(seq))throw new JournalError('这条来源不在已读取的证据中',404);
+    const prefix=snapshot.entries.filter(entry=>entry.seq<=result.humanSeq),provenance=createProvenanceIndex(prefix,{beforeSeq:result.humanSeq<Number.MAX_SAFE_INTEGER?result.humanSeq+1:Infinity});
+    const entries=prefix.filter(entry=>allowed.has(entry.seq)&&(seq===undefined||entry.seq===seq)).map(entry=>({...structuredClone(entry),...(provenance.has(entry.seq)?{provenance:structuredClone(provenance.get(entry.seq))}:{})}));
+    return {resultId,interactionId:result.interactionId,basisHash:result.basisHash,generatedAt:result.generatedAt,entries,provenance:Object.fromEntries(entries.filter(entry=>entry.provenance).map(entry=>[entry.seq,entry.provenance])),readEvidence:structuredClone(result.readEvidence),coverage:structuredClone(result.coverage)};
   }
   async interactionContext(id,interactionId,revision,side,offset=0,limit=20){
     if(typeof interactionId!=='string'||typeof revision!=='string'||!revision)throw new JournalError('缺少交互或原文版本');
@@ -76,7 +204,7 @@ export class Journal {
   matchesCheckpoint(saved,snapshotId,route,report){return !!saved&&saved.jobId!==report?.jobId&&saved.snapshotId===snapshotId&&saved.analysisVersion===ANALYSIS_VERSION&&saved.route.provider===route?.provider&&saved.route.model===route?.model;}
   async start(id){
     if(this.closed)throw new JournalError('插件正在卸载',503);
-    if(this.active){if(this.active.id===id)return this.runs.get(id);throw new JournalError('另一个会话正在解析，请稍后再试',409);}
+    if(this.active){if(this.active.id===id&&this.active.mode!=='interactions')return this.runs.get(id);throw new JournalError('已有解析任务正在处理，请稍后再试',409);}
     // Claim before the first await; double clicks cannot start competing writes.
     const abort=new AbortController();this.active={id,abort};
     const run={id,status:'running',stage:'读取 DSH 原始会话',startedAt:Date.now(),modelCalls:0};this.runs.set(id,run);

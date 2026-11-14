@@ -12,7 +12,7 @@ const call=(seq,id='call-a')=>raw(seq,'tool/call',{turn:1,step:1,callId:id,name:
 const result=(seq,id='call-a')=>raw(seq,'tool/result',{turn:1,step:1,message:{role:'tool',id:`result-${seq}`,source:{kind:'tool',callId:id},toolCallId:id,isError:false,content:[{type:'text',text:'工具返回；不表示任务已完成'}]}},{surfaceOp:'append',sourceEventSeqs:[seq-1]});
 function index(events){return indexInteractions(sourceEntries(events));}
 function harness(events){
- const domain={table(){throw Error('reading interactions must not access stored analysis');},close:async()=>{}};
+ const domain={table(name){assert.ok(['interaction_latest','interaction_versions'].includes(name),'reading interactions must not access whole-trajectory reports');return{get:()=>undefined};},close:async()=>{}};
  const ctx={sessionQuery:{readSession:async id=>({session:{id,origin:'main'},events:structuredClone(events)})}};
  Object.defineProperty(ctx,'llm',{get(){throw Error('reading interactions must not access a model');}});
  return {journal:new Journal(ctx,domain),ctx,domain};

@@ -25,9 +25,14 @@ try{
   await page.getByRole('heading',{name:'统一流量购买 H5 跳转',exact:true}).waitFor();
   await page.locator('.cj-expression-card').nth(1).waitFor();
   assert.equal(await page.locator('.cj-expression-card').count(),2);
-  assert.equal(await page.locator('.cj-primary').count(),0,'reading expressions must not require a full parse');
+  assert.equal(await page.getByRole('button',{name:'解析轨迹',exact:true}).count(),0,'full parsing is secondary to reading interactions');
+  await page.getByRole('button',{name:'整理当天交互',exact:true}).waitFor();
+  assert.ok(await page.locator('.cj-date-group').count()>0,'the default navigation groups sessions by human-interaction date');
+  assert.match(await page.locator('.cj-date-group').first().innerText(),/当日 1 段会话 \/ 2 次表达/);
   assert.match(await page.locator('.cj-expression-card').first().innerText(),/会话起点/);
+  await page.locator('.cj-expression-card').first().getByText('我的原话',{exact:true}).click();
   assert.equal(await page.locator('.cj-human .cj-expression-text').first().innerText(),'流量购买的 H5 跳转方式应该收敛。');
+  await page.locator('.cj-expression-card').nth(1).locator('.cj-prior-original>summary').click();
   assert.match(await page.locator('.cj-expression-card').nth(1).locator('.cj-prior').innerText(),/发现三个跳转入口，需要确认统一的范围/);
   await page.getByRole('button',{name:'看这次介入之前',exact:true}).click();
   await page.locator('.cj-interaction-context .cj-source').first().waitFor();
@@ -39,6 +44,37 @@ try{
   assert.match(await page.locator('.cj-interaction-context').innerText(),/FUTURE_RESULT_AFTER_INTERVENTION/);
   assert.equal((await runtime.api('status',{},'journal-test')).calls,0);
   await page.screenshot({path:join(output,'dsh-journal-expressions.png'),fullPage:true});
+  // Only the explicit action may invoke the model. Each interaction result
+  // has its own classification and immutable source evidence.
+  await page.getByRole('button',{name:'整理当天交互',exact:true}).click();
+  await page.getByRole('button',{name:'重新整理当天交互',exact:true}).waitFor({timeout:60000});
+  assert.equal(await page.locator('.cj-interaction-title').count(),2);
+  assert.equal(await page.locator('.cj-expression-card .cj-category').filter({hasText:'方向纠正'}).count(),1);
+  assert.equal(await page.locator('.cj-expression-card .cj-category').filter({hasText:'新任务'}).count(),1);
+  assert.equal(await page.locator('.cj-analysis-contribution').count(),2);
+  assert.match(await page.locator('.cj-analysis-note').first().innerText(),/AI 整理，可查看依据/);
+  const callsAfterAnalysis=(await runtime.api('status',{},'journal-test')).calls;
+  assert.ok(callsAfterAnalysis>0,'manual interaction analysis must use the configured model');
+  const secondCard=page.locator('.cj-expression-card').nth(1);
+  await secondCard.locator('.cj-analysis-contribution .cj-reference').first().click();
+  await secondCard.locator('.cj-frozen-evidence .cj-highlight').waitFor();
+  assert.match(await secondCard.locator('.cj-frozen-evidence .cj-highlight').innerText(),/不是只改安卓，鸿蒙也要统一/);
+  assert.doesNotMatch(await secondCard.locator('.cj-frozen-evidence').innerText(),/FUTURE_RESULT_AFTER_INTERVENTION/);
+  assert.match(await secondCard.locator('.cj-evidence-coverage').innerText(),/模型已读 \d+ \/ \d+ 字符/);
+  assert.match(await secondCard.locator('.cj-frozen-evidence .cj-highlight .cj-read-range').innerText(),/模型读取区间/);
+  await page.getByRole('group',{name:'交互分类',exact:true}).getByRole('button',{name:/方向纠正/}).click();
+  assert.equal(await page.locator('.cj-expression-card').count(),1);
+  await page.getByRole('group',{name:'交互分类',exact:true}).getByRole('button',{name:'全部 2',exact:true}).click();
+  assert.equal(await page.locator('.cj-expression-card').count(),2);
+  assert.equal((await runtime.api('status',{},'journal-test')).calls,callsAfterAnalysis,'evidence and category browsing must not call the model');
+  await page.screenshot({path:join(output,'dsh-journal-analyzed.png'),fullPage:true});
+  await runtime.api('fail',{value:true},'journal-test');
+  await page.locator('.cj-expression-card').nth(1).getByRole('button',{name:'重新整理这次交互',exact:true}).click();
+  await page.locator('.cj-item-error').waitFor();
+  assert.match(await page.locator('.cj-item-error').innerText(),/上次整理仍可阅读/);
+  assert.equal(await page.locator('.cj-interaction-title').count(),2,'failed interaction reruns retain previously valid results');
+  assert.equal(await page.locator('.cj-progress').count(),0,'an interaction run must not render as a full-trajectory parse');
+  await runtime.api('fail',{value:false},'journal-test');
   await page.getByRole('button',{name:'完整轨迹',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
   await runtime.api('malformed',{value:1},'journal-test');
@@ -48,9 +84,9 @@ try{
   await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
   await page.locator('.cj-progress').waitFor();
   assert.equal((await runtime.api('detail',{id:'journal-test-a'})).run.status,'running');
-  await page.getByRole('button',{name:'我的表达',exact:true}).click();
+  await page.getByRole('button',{name:'我的交互',exact:true}).click();
   await page.locator('.cj-expression-card').nth(1).waitFor();
-  assert.match(await page.locator('.cj-task-notice').innerText(),/完整轨迹正在解析/);
+  assert.match(await page.locator('.cj-task-notice').filter({hasText:'完整轨迹正在解析'}).innerText(),/完整轨迹正在解析/);
   await page.getByRole('button',{name:'完整轨迹',exact:true}).click();
   await page.locator('.cj-workspaces button[title$="android"]').click();
   await page.getByRole('heading',{name:'检查 Android Push API',exact:true}).waitFor();
@@ -69,7 +105,7 @@ try{
   await page.getByRole('button',{name:'查看原文'}).nth(1).click();
   await page.locator('.cj-source').first().waitFor();assert.match(await page.locator('.cj-evidence').innerText(),/TAIL_EVIDENCE/);
   await page.screenshot({path:join(output,'dsh-journal-context.png'),fullPage:true});
-  await page.getByRole('button',{name:'我的表达',exact:true}).click();
+  await page.getByRole('button',{name:'我的交互',exact:true}).click();
   await page.locator('.cj-expression-card').nth(1).waitFor();
   const callsBeforeReading=(await runtime.api('status',{},'journal-test')).calls;
   await runtime.api('append',{},'journal-test');
@@ -86,9 +122,9 @@ try{
   assert.equal(await page.locator('.cj-node').count(),0);
   await runtime.api('malformed',{value:3},'journal-test');
   await page.getByRole('button',{name:'解析轨迹',exact:true}).click();
-  await page.locator('.cj-reader .cj-alert').waitFor();
-  assert.match(await page.locator('.cj-reader .cj-alert').innerText(),/本次尚未生成轨迹/);
-  assert.doesNotMatch(await page.locator('.cj-reader .cj-alert').innerText(),/已有轨迹仍可阅读/);
+  await page.locator('.cj-reader .cj-alert').filter({hasText:'本次尚未生成轨迹'}).waitFor();
+  assert.match(await page.locator('.cj-reader .cj-alert').filter({hasText:'本次尚未生成轨迹'}).innerText(),/本次尚未生成轨迹/);
+  assert.doesNotMatch(await page.locator('.cj-reader .cj-alert').filter({hasText:'本次尚未生成轨迹'}).innerText(),/已有轨迹仍可阅读/);
   await page.getByText('诊断信息',{exact:true}).click();
   assert.match(await page.locator('.cj-reader .cj-alert pre').innerText(),/SUMMARY_LENGTH/);
   await page.screenshot({path:join(output,'dsh-journal-format-failure.png'),fullPage:true});
@@ -106,10 +142,10 @@ try{
   await runtime.api('seed-list',{},'journal-test');
   await page.getByRole('button',{name:'刷新会话',exact:true}).click();
   await page.locator('.cj-workspaces button').filter({hasText:'未归入 workspace'}).click();
-  await page.getByText('显示 5 / 12 条 · 已隐藏 7 条归档',{exact:true}).waitFor();
+  await page.getByText('显示 1 天 · 5 段会话 · 已隐藏 7 条归档',{exact:true}).waitFor();
   assert.equal(await page.locator('.cj-session').count(),5);
   await page.getByRole('checkbox',{name:/包含已归档会话/}).check();
-  await page.getByText('显示 12 / 12 条',{exact:true}).waitFor();
+  await page.getByText('显示 1 天 · 12 段会话',{exact:true}).waitFor();
   assert.equal(await page.locator('.cj-session').count(),12);
   const list=page.getByRole('region',{name:'会话列表',exact:true});
   assert.ok(await list.evaluate(e=>e.scrollHeight>e.clientHeight),'12 sessions must overflow the bounded list');
@@ -122,7 +158,10 @@ try{
   await page.keyboard.press('PageDown');
   await page.waitForFunction(()=>document.querySelector('.cj-session-list').scrollTop>0);
   await page.screenshot({path:join(output,'dsh-journal-list-scroll.png'),fullPage:true});
+  await page.getByRole('button',{name:'全部会话',exact:true}).click();
+  await page.getByText('显示 12 / 12 条',{exact:true}).waitFor();
+  assert.equal(await page.locator('.cj-session').count(),12,'the original all-session navigation remains reachable');
   assert.deepEqual(errors,[],'native page must not throw');
-  console.log('Native DSH sidebar, immediate human expressions and prior context without model calls, revision refresh, full timeline, manual parse, workspace switch, failure state, search, narrow layout passed.');
+  console.log('Native DSH date/session navigation, immediate source reading without model calls, manual interaction analysis and classification, immutable evidence, revision refresh, full timeline, workspace switch, failures, search and narrow layout passed.');
 }catch(error){if(page){await page.screenshot({path:join(output,'failure.png'),fullPage:true}).catch(()=>{});await writeFile(join(output,'failure.html'),await page.content());}await writeFile(join(output,'browser-errors.txt'),errors.join('\n'));console.error(runtime.log);throw error;}
 finally{await browser?.close();await runtime.stop();}
