@@ -17,6 +17,18 @@ try{
   if(needsSetup)await later.click();
   await page.getByRole('button',{name:'协作观察',exact:true}).click({timeout:60000});
   await page.locator('[data-testid=journal]').waitFor();
+  // The selected day leads the journal. Build information is still reachable below the reader.
+  assert.equal(await page.getByRole('heading',{level:1,name:'协作观察',exact:true}).count(),1);
+  const datePicker=page.locator('.cj-date-trigger');
+  await datePicker.click();
+  await page.getByRole('dialog',{name:'选择日期'}).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await datePicker.getAttribute('aria-expanded'),'false');
+  assert.ok(await datePicker.evaluate(button=>parseFloat(getComputedStyle(button.querySelector('span')).fontSize)>24));
+  assert.equal(await page.locator('.cj-page footer .cj-build').count(),1);
+  await page.getByRole('button',{name:'插件设置',exact:true}).click();
+  await page.getByRole('dialog',{name:'插件设置'}).waitFor();
+  await page.keyboard.press('Escape');
   await page.getByText('版本信息',{exact:true}).click();
   const build=(await runtime.api('catalog')).pluginBuild;
   assert.match(await page.locator('.cj-build').innerText(),new RegExp(`后台 ${runtime.pluginVersion.replaceAll('.','\\.')} / ${build.id}`));
@@ -76,7 +88,7 @@ try{
   assert.equal(await page.locator('.cj-progress').count(),0,'an interaction run must not render as a full-trajectory parse');
   await runtime.api('fail',{value:false},'journal-test');
   await page.getByRole('button',{name:'完整轨迹',exact:true}).click();
-  await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
+  await page.getByRole('button',{name:'解析轨迹',exact:true}).click({trial:true});
   await runtime.api('malformed',{value:1},'journal-test');
   // Hold the model so navigation must occur before completion. Returning to
   // the session must synchronize the catalogue without clicking Refresh.
@@ -97,7 +109,7 @@ try{
   await page.locator('.cj-timeline').waitFor({timeout:60000});assert.equal(await page.locator('.cj-node').count(),4);
   await page.locator('.cj-session[aria-pressed="true"] .cj-status-ready').waitFor();
   assert.equal(await page.locator('.cj-session[aria-pressed="true"] .cj-status').innerText(),'完整轨迹 · 已解析');
-  await page.waitForFunction(()=>document.querySelector('.cj-primary')?.disabled===false);
+  await page.getByRole('button',{name:'重新解析',exact:true}).click({trial:true});
   await page.screenshot({path:join(output,'dsh-journal-desktop.png'),fullPage:true});
   await page.emulateMedia({colorScheme:'dark'});
   await page.screenshot({path:join(output,'dsh-journal-dark.png'),fullPage:true});
@@ -153,10 +165,19 @@ try{
   await page.waitForFunction(()=>{const e=document.querySelector('.cj-session-list');return e.scrollTop+e.clientHeight>=e.scrollHeight-2;});
   const last=page.locator('.cj-session').last(),title=await last.locator('.cj-session-title').innerText();
   await last.click();await page.getByRole('heading',{name:title,exact:true}).waitFor();
-  await list.focus();await page.keyboard.press('Control+Home');
+  await list.hover();
+  await page.mouse.wheel(0,-5000);
   await page.waitForFunction(()=>document.querySelector('.cj-session-list').scrollTop===0);
+  await list.focus();
   await page.keyboard.press('PageDown');
   await page.waitForFunction(()=>document.querySelector('.cj-session-list').scrollTop>0);
+  // Repeated PageDown must reach the last session without moving focus to the page.
+  const pages=await list.evaluate(e=>Math.ceil(e.scrollHeight/e.clientHeight)+1);
+  for(let i=1;i<pages;i++)await page.keyboard.press('PageDown');
+  await page.waitForFunction(()=>{
+    const e=document.querySelector('.cj-session-list');
+    return document.activeElement===e&&e.scrollTop+e.clientHeight>=e.scrollHeight-2;
+  });
   await page.screenshot({path:join(output,'dsh-journal-list-scroll.png'),fullPage:true});
   await page.getByRole('button',{name:'全部会话',exact:true}).click();
   await page.getByText('显示 12 / 12 条',{exact:true}).waitFor();

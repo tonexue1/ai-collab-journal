@@ -1,5 +1,7 @@
 import React,{useCallback,useEffect,useRef,useState} from 'react';
 import css from './style.css';
+import dayCss from './day-presentation.css';
+import readingCss from './reading.css';
 import { pluginBuild } from './build-info.mjs';
 import { syncCatalogDetail } from './catalog-sync.mjs';
 import { pollReader } from './reader-poll.mjs';
@@ -16,7 +18,11 @@ export async function request(action,params={},signal){
 }
 const statusText={unparsed:'未解析',ready:'已解析',stale:'有新内容',error:'读取失败'};
 const categories=['方向纠正','任务指挥','上下文补充','流程推进','授权选择','结果反馈','新任务','未判定'];
-const formatTime=t=>t==null||!Number.isFinite(new Date(t).getTime())?'时间未知':new Date(t).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+function formatTime(t, timeZone, clockOnly = false) {
+  if (t == null || !Number.isFinite(new Date(t).getTime())) return '时间未知';
+  const dateParts = clockOnly ? {} : { month: '2-digit', day: '2-digit' };
+  return new Date(t).toLocaleString('zh-CN', { ...dateParts, hour: '2-digit', minute: '2-digit', hour12: false, timeZone });
+}
 const formatDate=date=>date?date.replaceAll('-',' / '):'全部日期';
 function Icon({size=20}){return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 3h12a2 2 0 0 1 2 2v16H6a3 3 0 0 1-3-3V5a2 2 0 0 1 2-2Z"/><path d="M3 17h16M8 7h6M8 11h8"/></svg>;}
 function SourceEntry({entry,highlight,readRanges}){
@@ -87,37 +93,49 @@ function FrozenEvidence({id,resultId,seq}){
 function References({evidence,onSelect}){
   return evidence?.length>0?<span className="cj-references">{evidence.map((reference,index)=><button key={`${reference.seq}:${index}`} className="cj-reference" title={reference.quote} onClick={()=>onSelect(reference.seq)}>依据 #{reference.seq}</button>)}</span>:null;
 }
-function InteractionCard({id,item,revision,onRefresh,onAnalyze,disabled,itemError}){
+function InteractionCard({id,item,date,timeZone,revision,onRefresh,onAnalyze,disabled,itemError}){
   const [side,setSide]=useState(null),[evidenceSeq,setEvidenceSeq]=useState(null);
   const analysis=item.analysis,result=analysis?.result,beforeOpen=side==='before',afterOpen=side==='after';
   const showEvidence=seq=>{setEvidenceSeq(seq);setSide(null);};
   const toggle=next=>{setSide(current=>current===next?null:next);setEvidenceSeq(null);};
   return <article className="cj-card cj-expression-card">
-    <header><div className="cj-interaction-meta"><time>{formatTime(item.human.time)}</time>{item.isFirst&&<span>会话起点</span>}{result?result.categories.map(category=><span className="cj-category" key={category.label}>{category.label}</span>):<span className="cj-category cj-unprocessed">未整理</span>}</div><span>#{item.human.seq}</span></header>
+    <header>
+      <div className="cj-interaction-meta">
+        <time title={formatTime(item.human.time,timeZone)}>{formatTime(item.human.time,timeZone,!!date)}</time>
+        {item.isFirst&&<span>会话起点</span>}
+        {result?result.categories.map(category=><span className="cj-category" key={category.label}>{category.label}</span>):<span className="cj-category cj-unprocessed">未整理</span>}
+      </div>
+      {result&&<span className="cj-analysis-note">AI 整理，可查看依据{result.certainty==='unclear'?' · 前因待确认':''}</span>}
+    </header>
     {result?<>
       <h3 className="cj-interaction-title">{result.title}</h3>
-      <section className="cj-analysis-before"><h4>此前情况</h4><p>{result.before.text}</p><References evidence={result.before.evidence} onSelect={showEvidence}/></section>
-      <section className="cj-analysis-contribution"><h4>我补上的</h4><p>{result.contribution.text}</p><References evidence={result.contribution.evidence} onSelect={showEvidence}/></section>
-      <div className="cj-classification-evidence">{result.categories.map(category=><span key={category.label}>{category.label}<References evidence={category.evidence} onSelect={showEvidence}/></span>)}</div>
-      <p className="cj-analysis-note">AI 整理，可查看依据{result.certainty==='unclear'?' · 前因待确认':''}</p>
+      <section className="cj-analysis-before"><h4>此前情况</h4><p>{result.before.text}<References evidence={result.before.evidence} onSelect={showEvidence}/></p></section>
+      <section className="cj-analysis-contribution"><h4>我补上的</h4><p>{result.contribution.text}<References evidence={result.contribution.evidence} onSelect={showEvidence}/></p></section>
       {analysis.stale&&<p className="cj-notice">相关原文或整理规则已更新。这里保留上次整理，可重新整理这次交互。</p>}
     </>:<section className="cj-unprocessed-preview"><h3>原话摘录</h3><p>{item.human.text.slice(0,180)}{item.human.text.length>180?'…':''}</p></section>}
     {itemError&&<div className="cj-alert cj-item-error" role="alert"><p>这次未整理完成：{itemError.error}{analysis?'。上次整理仍可阅读。':''}</p>{(itemError.stage||itemError.code||itemError.diagnostic)&&<details><summary>查看诊断</summary><p>{itemError.stage}{itemError.code?` · ${itemError.code}`:''}</p>{itemError.diagnostic&&<pre>{JSON.stringify(itemError.diagnostic,null,2)}</pre>}</details>}</div>}
-    <details className="cj-original"><summary>我的原话</summary><section className="cj-human"><p className="cj-expression-text">{item.human.text}</p></section></details>
-    {item.before.preview&&<details className="cj-original cj-prior-original"><summary>此前 AI 的原话 · {formatTime(item.before.preview.time)}</summary><section className="cj-prior"><FoldedText text={item.before.preview.text} prior/></section></details>}
-    <footer className="cj-interaction-actions"><button className="cj-before-button" aria-expanded={beforeOpen} onClick={()=>toggle('before')}>{beforeOpen?'收起介入前原文':item.isFirst&&item.before.entryCount===0?'查看会话起点原文':'看这次介入之前'}</button>{item.after.entryCount>0&&<button className="cj-link" aria-expanded={afterOpen} onClick={()=>toggle('after')}>{afterOpen?'收起后续':'查看后续'}</button>}<button className="cj-link cj-analyze-one" disabled={disabled} onClick={()=>onAnalyze(item.id,!!analysis)}>{analysis?'重新整理这次交互':'整理这次交互'}</button></footer>
+    <div className="cj-originals">
+      <details className="cj-original"><summary>我的原话</summary><section className="cj-human"><span className="cj-original-time">#{item.human.seq} · {formatTime(item.human.time,timeZone)}</span><p className="cj-expression-text">{item.human.text}</p></section></details>
+      {item.before.preview&&<details className="cj-original cj-prior-original"><summary>此前 AI 原话</summary><section className="cj-prior"><span className="cj-original-time">{formatTime(item.before.preview.time,timeZone)}</span><FoldedText text={item.before.preview.text} prior/></section></details>}
+      {result&&<details><summary>分类依据</summary><div className="cj-classification-evidence">{result.categories.map(category=><span key={category.label}>{category.label}<References evidence={category.evidence} onSelect={showEvidence}/></span>)}</div></details>}
+      <button className="cj-before-button" aria-expanded={beforeOpen} onClick={()=>toggle('before')}>{beforeOpen?'收起介入前原文':item.isFirst&&item.before.entryCount===0?'查看会话起点原文':'看这次介入之前'}</button>
+      {item.after.entryCount>0&&<button className="cj-link" aria-expanded={afterOpen} onClick={()=>toggle('after')}>{afterOpen?'收起后续':'查看后续'}</button>}
+      <button className="cj-link cj-analyze-one" disabled={disabled} onClick={()=>onAnalyze(item.id,!!analysis)}>{analysis?'重新整理这次交互':'整理这次交互'}</button>
+    </div>
     {side&&<InteractionContext key={`${item.id}:${side}:${revision}`} id={id} interactionId={item.id} revision={revision} side={side} onRefresh={onRefresh}/>}
     {evidenceSeq!=null&&analysis&&<><button className="cj-link cj-close-evidence" onClick={()=>setEvidenceSeq(null)}>收起依据</button><FrozenEvidence key={analysis.resultId} id={id} resultId={analysis.resultId} seq={evidenceSeq}/></>}
   </article>;
 }
-function InteractionList({id,value,onRefresh,onAnalyze,disabled}){
-  const [filter,setFilter]=useState('');
-  const items=value.items.filter(item=>!filter||(filter==='未整理'?!item.analysis:item.analysis?.result.categories.some(category=>category.label===filter)));
+function CategoryFilters({value,filter,setFilter}){
   const counts=new Map();for(const item of value.items){for(const category of item.analysis?.result.categories||[{label:'未整理'}])counts.set(category.label,(counts.get(category.label)||0)+1);}
+  return <div className="cj-category-filters" role="group" aria-label="交互分类"><button aria-pressed={!filter} onClick={()=>setFilter('')}>全部 {value.items.length}</button>{[...categories,'未整理'].filter(label=>counts.has(label)).map(label=><button key={label} aria-pressed={filter===label} onClick={()=>setFilter(label)}>{label} {counts.get(label)}</button>)}</div>;
+}
+function InteractionList({id,date,value,filter,setFilter,onRefresh,onAnalyze,disabled}){
+  const items=value.items.filter(item=>!filter||(filter==='未整理'?!item.analysis:item.analysis?.result.categories.some(category=>category.label===filter)));
   const errors=new Map((value.analysisRun?.errors||[]).map(error=>[error.interactionId,error]));
-  return <><div className="cj-category-filters" role="group" aria-label="交互分类"><button aria-pressed={!filter} onClick={()=>setFilter('')}>全部 {value.items.length}</button>{[...categories,'未整理'].filter(label=>counts.has(label)).map(label=><button key={label} aria-pressed={filter===label} onClick={()=>setFilter(label)}>{label} {counts.get(label)}</button>)}</div>
+  return <>
     {!items.length&&<p className="cj-list-empty">当前分类没有交互。<button className="cj-link" onClick={()=>setFilter('')}>查看全部</button></p>}
-    <ol className="cj-expressions" aria-label="我的交互">{items.map(item=><li key={item.id}><InteractionCard key={`${item.id}:${item.analysis?.resultId||'raw'}`} id={id} item={item} revision={value.revision} onRefresh={onRefresh} onAnalyze={onAnalyze} disabled={disabled} itemError={errors.get(item.id)}/></li>)}</ol>
+    <ol className="cj-expressions" aria-label="我的交互">{items.map(item=><li key={item.id}><InteractionCard key={`${item.id}:${item.analysis?.resultId||'raw'}`} id={id} item={item} date={date} timeZone={value.timeZone} revision={value.revision} onRefresh={onRefresh} onAnalyze={onAnalyze} disabled={disabled} itemError={errors.get(item.id)}/></li>)}</ol>
   </>;
 }
 function Timeline({id,report}){
@@ -153,6 +171,9 @@ export function JournalPage(){
   const displayedSession=useRef(null);
   displayedSession.current=id?{id,date}:null;
   const scopeKey=JSON.stringify([id,date,timeZone]),detail=storedDetail?.id===id?storedDetail:null,interactions=storedInteractions?.key===scopeKey?storedInteractions.value:null;
+  const [categoryFilter,setCategoryFilter]=useState('');
+  useEffect(()=>setCategoryFilter(''),[scopeKey,view]);
+  const sessionWorkspace=group||catalog?.workspaces.find(w=>w.sessions.some(s=>s.id===id));
   const fullRun=detail?.run?.mode==='interactions'?null:detail?.run,analysisRun=interactions?.analysisRun;
   const active=activeRun?.status==='running'?activeRun:null,running=starting||!!active,fullRunning=starting==='parse'||fullRun?.status==='running',analysisRunning=starting==='analyze'||analysisRun?.status==='running';
   const buildMismatch=catalog&&catalog.pluginBuild?.id!==pluginBuild.id;
@@ -229,44 +250,69 @@ export function JournalPage(){
   const visibleSessionCount=new Set(candidates.map(s=>s.id)).size;
   function selectDay(value){setSelectedDay(value);setNavigation('days');setSelected(null);}
   return <main className="cj-root" data-testid="journal"><div className="cj-page">
-    <header className="cj-heading"><div><div className="cj-eyebrow">DSH · COLLABORATION JOURNAL</div><h1>协作观察 <span>看清自己的表达与介入</span></h1><p>按日期回看：此前发生了什么，我又补上了什么。</p></div>
+    <header className="cj-heading"><h1><span className="cj-book-mark" aria-hidden="true"/>协作观察</h1>
       <div className="cj-heading-actions">
-        <button type="button" onClick={refresh} disabled={loading}>{loading?'读取中…':'刷新会话'}</button>
-        <button type="button" aria-haspopup="dialog" onClick={()=>setSettingsOpen(true)}>插件设置</button>
+        <button type="button" onClick={refresh} disabled={loading}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 8a6.4 6.4 0 1 0 .1 3.8M16.2 3.8V8h-4.3"/></svg>{loading?'读取中…':'刷新会话'}</button>
+        <button type="button" aria-haspopup="dialog" onClick={()=>setSettingsOpen(true)}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h4m4 0h6M3 14h8m4 0h2"/><circle cx="9" cy="6" r="2"/><circle cx="13" cy="14" r="2"/></svg>插件设置</button>
       </div>
     </header>
     {settingsOpen&&<PluginSettings request={request} timeZone={timeZone} onClose={()=>setSettingsOpen(false)}/>}
-    <details className="cj-build"><summary>版本信息</summary><p>界面 {pluginBuild.version} / {pluginBuild.id}</p><p>后台 {catalog?.pluginBuild?`${catalog.pluginBuild.version} / ${catalog.pluginBuild.id}`:'未提供构建标识'}</p></details>
     {buildMismatch&&<p className="cj-notice" role="alert">界面与后台构建不一致。请完全退出 DSH（包括托盘）并重启，再核对版本信息。</p>}
     <div className="cj-daily-header">
       <DayNavigation date={selectedDay} today={today} onChange={selectDay} availableDates={(days?.days||[]).map(day=>day.date)}/>
       <DaySummary key={JSON.stringify([selectedDay,timeZone,archived])} date={selectedDay} timeZone={timeZone} includeArchived={archived} revision={revision + summaryRevision} request={request}/>
     </div>
-    <div className="cj-workspace-filter"><span>工作区</span><div className="cj-workspaces" aria-label="选择 workspace"><button onClick={()=>{setWorkspace('');setQuery('');}} aria-pressed={!workspace}>全部工作区</button>{catalog?.workspaces.map(w=><button key={w.id} onClick={()=>{setWorkspace(w.id);setQuery('');}} aria-pressed={workspace===w.id} title={w.path}><span className="cj-folder" aria-hidden="true">▱</span>{w.title}</button>)}</div></div>
+    <div className="cj-workspace-filter"><span>工作区</span><div className="cj-workspaces" role="group" aria-label="选择工作区"><button onClick={()=>{setWorkspace('');setQuery('');}} aria-pressed={!workspace}>全部工作区</button>{catalog?.workspaces.map(w=><button key={w.id} onClick={()=>{setWorkspace(w.id);setQuery('');}} aria-pressed={workspace===w.id} title={w.path}>{w.title}</button>)}</div></div>
     {error&&<div className="cj-alert" role="alert">{error}<button onClick={refresh}>刷新重试</button></div>}
     {active&&active.id!==id&&<div className="cj-task-notice" role="status"><span>其他会话正在{active.mode==='interactions'?'整理交互':'解析完整轨迹'}，可继续阅读。</span><button className="cj-link" onClick={cancel}>暂停任务</button></div>}
     <div className="cj-layout"><aside className="cj-list"><div className="cj-list-head">
-      <h2>{navigation==='days'?'交互日期':'所有会话'}</h2><p>{group?.title||'全部工作区'} · {timeZone}</p>
+      <h2>会话</h2><p className="cj-list-zone">{timeZone}</p>
       <div className="cj-nav-mode" role="group" aria-label="会话分组"><button aria-pressed={navigation==='days'} onClick={()=>setNavigation('days')}>按日期</button><button aria-pressed={navigation==='sessions'} onClick={()=>setNavigation('sessions')}>全部会话</button></div>
       <input aria-label="搜索会话" placeholder="搜索会话…" value={query} onChange={e=>setQuery(e.target.value)}/>
       <label><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>包含已归档会话{archivedCount?`（${archivedCount}）`:''}</label>
       <p className="cj-list-count">{navigation==='days'?`显示 ${visibleDays.length} 天 · ${visibleSessionCount} 段会话`:`显示 ${catalogSessions.length} / ${workspaceSessions.length} 条`}{!archived&&archivedCount?` · 已隐藏 ${archivedCount} 条归档`:''}</p>
     </div><div className="cj-session-list" role="region" aria-label="会话列表" tabIndex={0}>
-      {navigation==='days'&&visibleDays.map(day=><section className="cj-date-group" key={day.date}><header><h3>{formatDate(day.date)}</h3><p>{query?'匹配':'当日'} {day.sessions.length} 段会话 / {day.sessions.reduce((sum,item)=>sum+item.humanCount,0)} 次表达</p></header>{day.sessions.map(s=>{const native=all.find(item=>item.id===s.id);return <button className="cj-session" key={s.id} onClick={()=>setSelected({id:s.id,date:day.date})} aria-pressed={id===s.id&&date===day.date}><span className="cj-session-title">{s.title}</span><span className="cj-session-meta"><span>{s.humanCount} 次表达</span>{s.archived&&<span>已归档</span>}</span>{native&&<span className={`cj-status cj-status-${native.status}`}>{native.status==='error'?'':'完整轨迹 · '}{statusText[native.status]}</span>}</button>;})}</section>)}
-      {navigation==='sessions'&&catalogSessions.map(s=><button className="cj-session" key={s.id} onClick={()=>setSelected({id:s.id,date:null})} aria-pressed={id===s.id}><span className="cj-session-title">{s.title}</span><span className="cj-session-meta"><time>{formatTime(s.lastActivityAt)}</time><span>{s.humanCount} 次表达</span></span><span className={`cj-status cj-status-${s.status}`}>{s.archived?'已归档 · ':''}{s.status==='error'?'':'完整轨迹 · '}{statusText[s.status]}</span>{s.error&&<small>{s.error}</small>}</button>)}
+      {navigation==='days'&&visibleDays.map(day=><section className="cj-date-group" key={day.date}>
+        <header><h3>{day.date.replaceAll('-','/')}</h3><p>{query?'匹配':'当日'} {day.sessions.length} 段会话 / {day.sessions.reduce((sum,item)=>sum+item.humanCount,0)} 次表达</p></header>
+        {day.sessions.map(s=>{
+          const native=all.find(item=>item.id===s.id);
+          return <button className="cj-session" key={s.id} onClick={()=>setSelected({id:s.id,date:day.date})} aria-pressed={id===s.id&&date===day.date}>
+            <span className="cj-session-title">{s.title}</span>
+            <span className="cj-session-meta"><span>{s.humanCount} 次表达</span>{s.archived&&<span>已归档</span>}{native&&<span className={`cj-status cj-status-${native.status}`}>{native.status==='error'?'':'完整轨迹 · '}{statusText[native.status]}</span>}</span>
+          </button>;
+        })}
+      </section>)}
+      {navigation==='sessions'&&catalogSessions.map(s=><button className="cj-session" key={s.id} onClick={()=>setSelected({id:s.id,date:null})} aria-pressed={id===s.id}>
+        <span className="cj-session-title">{s.title}</span>
+        <span className="cj-session-meta"><time>{formatTime(s.lastActivityAt,timeZone)}</time><span>{s.humanCount} 次表达</span><span className={`cj-status cj-status-${s.status}`}>{s.archived?'已归档 · ':''}{s.status==='error'?'':'完整轨迹 · '}{statusText[s.status]}</span></span>
+        {s.error&&<small>{s.error}</small>}
+      </button>)}
       {navigation==='days'&&dayState?.key===daysKey&&dayState.error&&<p className="cj-alert" role="alert">{dayState.error}</p>}
       {!candidates.length&&<p className="cj-list-empty">{navigation==='days'&&dayState?.key!==daysKey?'正在读取交互日期…':query?'没有匹配的会话':navigation==='days'?'此范围没有人的交互':'没有匹配的会话'}</p>}
     </div>{navigation==='days'&&days?.unknownTimeCount>0&&<p className="cj-list-foot">{days.unknownTimeCount} 次表达缺少日期，可在「全部会话」查看。</p>}{navigation==='days'&&days?.errors.length>0&&<details className="cj-list-errors"><summary>{days.errors.length} 段会话读取失败</summary>{days.errors.map(item=><p key={item.id}>{item.id}：{item.error}</p>)}</details>}</aside>
     <section className="cj-reader" aria-label="会话阅读">{!id?<div className="cj-empty"><Icon size={32}/><h2>{navigation==='days'?'按日期看自己的交互':'选择一段会话'}</h2><p>人的原话可直接阅读，点击整理后再看前因、贡献与分类。</p></div>:<>
-      <header className="cj-reader-head"><div><div className="cj-eyebrow">{view==='expressions'?`${formatDate(date)} · 我的交互`:'整段会话 · 全部日期'}</div><h2>{session.title}</h2><p>{view==='expressions'?`${interactions?.items.length??session.humanCount} 次表达 · 整理后可按分类回看，并核对原文依据。`:<>{detail?.route?`${detail.route.provider} / ${detail.route.model}`:'复用此会话的 DSH 模型'}{detail?.report?` · 生成于 ${formatTime(detail.report.generatedAt)}`:''}</>}</p></div>{view==='expressions'?<button className="cj-primary" disabled={running||!interactions?.items.length||!detail?.route} onClick={()=>analyze(undefined,allAnalyzed)}>{analysisRunning?'正在整理…':allAnalyzed?(date?'重新整理当天交互':'重新整理这段会话'):(date?'整理当天交互':'整理这段会话')}</button>:<button className="cj-primary" disabled={running||!detail?.humanCount||!detail.route} onClick={()=>act('parse')}>{fullRunning?'正在解析…':detail?.checkpoint?'继续解析':detail?.report?'重新解析':'解析轨迹'}</button>}</header>
-      <div className="cj-reader-tabs" role="group" aria-label="阅读方式"><button aria-pressed={view==='expressions'} onClick={()=>setView('expressions')}>我的交互</button><button aria-pressed={view==='timeline'} onClick={()=>setView('timeline')}>完整轨迹</button></div>
+      <header className="cj-reader-head">
+        <div><h2>{session.title}</h2>
+          <p>{sessionWorkspace&&<span>{sessionWorkspace.title}</span>}
+            {view==='expressions'?<><span>{interactions?.items.length??session.humanCount} 次表达</span>{!date&&<span>全部日期</span>}</>:<>
+              <span>整段会话 · 全部日期</span><span>{detail?.route?`${detail.route.provider} / ${detail.route.model}`:'复用此会话的 DSH 模型'}</span>
+              {detail?.report&&<span>生成于 {formatTime(detail.report.generatedAt,timeZone)}</span>}
+            </>}
+          </p>
+        </div>
+        {view==='expressions'?<button className={allAnalyzed?'cj-reanalyze':'cj-primary'} disabled={running||!interactions?.items.length||!detail?.route} onClick={()=>analyze(undefined,allAnalyzed)}>{analysisRunning?'正在整理…':allAnalyzed?(date?'重新整理当天交互':'重新整理这段会话'):(date?'整理当天交互':'整理这段会话')}</button>:<button className={detail?.report&&!detail.checkpoint?'cj-reanalyze':'cj-primary'} disabled={running||!detail?.humanCount||!detail.route} onClick={()=>act('parse')}>{fullRunning?'正在解析…':detail?.checkpoint?'继续解析':detail?.report?'重新解析':'解析轨迹'}</button>}
+      </header>
+      <div className="cj-reading-controls">
+        <div className="cj-reader-tabs" role="group" aria-label="阅读方式"><button aria-pressed={view==='expressions'} onClick={()=>setView('expressions')}>我的交互</button><button aria-pressed={view==='timeline'} onClick={()=>setView('timeline')}>完整轨迹</button></div>
+        {view==='expressions'&&interactions?.items.length>0&&<CategoryFilters value={interactions} filter={categoryFilter} setFilter={setCategoryFilter}/>}
+      </div>
       {analysisRun&&<div className={`cj-task-notice cj-analysis-progress${analysisRun.status==='failed'?' cj-analysis-failed':''}`} role="status"><span>{analysisRun.scopeDate!==date?`${formatDate(analysisRun.scopeDate)} · `:''}{analysisRun.status==='running'?'正在整理交互':analysisRun.status==='cancelled'?'交互整理已暂停':analysisRun.status==='failed'?(analysisRun.error?'交互整理未完成':'部分交互未整理完成'):'交互整理完成'} · 已保存 {analysisRun.completed} / {analysisRun.total} 次{analysisRun.errors?.length?` · ${analysisRun.errors.length} 次失败`:''}{analysisRun.status==='running'?` · ${analysisRun.stage}`:''}</span>{analysisRun.status==='running'&&<button className="cj-link" onClick={cancel}>暂停</button>}</div>}
       {analysisRun?.error&&<div className="cj-alert cj-analysis-error" role="alert"><p>{analysisRun.error}。已保存的整理仍可阅读。</p>{analysisRun.diagnostic&&<details><summary>整理诊断信息</summary><pre>{JSON.stringify(analysisRun.diagnostic,null,2)}</pre></details>}</div>}
       {view==='expressions'?<>
         {fullNotice&&<div className="cj-task-notice" role="status"><span>{fullNotice}{fullRunning&&fullRun?.totalCalls>0?` · ${fullRun.completedCalls||0} / ${fullRun.totalCalls}`:''}</span><button className="cj-link" onClick={()=>setView('timeline')}>{fullRunning?'查看进度':'查看详情'}</button></div>}
         {interactionError&&<div className="cj-alert" role="alert">{interactionError}<button onClick={refresh}>刷新会话</button></div>}
         {!interactions&&!interactionError&&<p className="cj-expressions-loading" role="status">正在读取你的交互…</p>}
-        {interactions?.items.length>0&&<InteractionList key={scopeKey} id={id} value={interactions} onRefresh={refresh} onAnalyze={analyze} disabled={running||!detail?.route}/>}
+        {interactions?.items.length>0&&<InteractionList key={scopeKey} id={id} date={date} value={interactions} filter={categoryFilter} setFilter={setCategoryFilter} onRefresh={refresh} onAnalyze={analyze} disabled={running||!detail?.route}/>}
         {interactions&&!interactions.items.length&&<div className="cj-empty"><h2>这段会话没有此范围内的人的表达</h2><p>可切换日期，或查看完整轨迹。</p></div>}
       </>:<>
         {detail?.plan?.totalCalls>0&&<p className="cj-note">完整解析约 {detail.plan.totalCalls} 次调用（不含重试） · {detail.plan.fragmentCount} 个片段。可离开此页面，保持 DSH 运行；暂停或退出后，已完成部分会保留。</p>}
@@ -277,12 +323,13 @@ export function JournalPage(){
         {detail?.report?<><div className="cj-reading-key"><span><i/>人提出、纠正、确认</span><span><i/>AI 回复、调查、执行</span><small>{detail.report.nodes.length} 个节点</small></div><Timeline key={id} id={id} report={detail.report}/><p className="cj-footnote">摘要由 AI 整理，请结合原文核对。图片、音频等附件本版仅保留引用。</p></>:<div className="cj-empty"><div className="cj-sequence"><b>人</b><span>→</span><b>AI</b><span>→</span><b>人</b><span>→</span><b>AI</b></div><h2>{detail?'把长对话，读成清楚的过程':'正在读取会话…'}</h2><p>{detail&&!detail.route?'请先在 DSH 选择模型并完成一次对话。':'每次人的表达独立保留，连续的 AI 行动合并展示。'}<br/>点击「解析轨迹」后，使用 DSH 模型整理整段会话。</p></div>}
       </>}
     </>}</section></div>
+    <footer className="cj-page-footer"><details className="cj-build"><summary>版本信息</summary><p>界面 {pluginBuild.version} / {pluginBuild.id}</p><p>后台 {catalog?.pluginBuild?`${catalog.pluginBuild.version} / ${catalog.pluginBuild.id}`:'未提供构建标识'}</p></details></footer>
   </div></main>;
 }
 export const name='dsh-collab-journal';
 export const inject=['slots','connection'];
 export function apply(ctx){
-  ctx.effect(()=>{const style=document.createElement('style');style.dataset.plugin=name;style.textContent=css;document.head.append(style);return()=>style.remove();});
+  ctx.effect(()=>{const style=document.createElement('style');style.dataset.plugin=name;style.textContent=[css,dayCss,readingCss].join('\n');document.head.append(style);return()=>style.remove();});
   ctx.slots.inject('main',()=>ctx.slots.register({name:'main',key:name},()=>React.createElement(JournalPage)));
   ctx.slots.inject('plugins.bundle.config',()=>ctx.slots.register({name:'plugins.bundle.config',key:name},({view})=>view==='page'?<PluginSettings request={request} timeZone={Intl.DateTimeFormat().resolvedOptions().timeZone}/>:null));
   ctx.slots.inject('sidebar.panellist',()=>ctx.slots.register({name:'sidebar.panellist',id:name,order:21,label:()=> '协作观察'},props=>React.createElement(Icon,props)));
